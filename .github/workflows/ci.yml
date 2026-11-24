@@ -10,57 +10,37 @@ jobs:
   lint-test:
     name: Lint & Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        rust:
-          - stable
-        node:
-          - 20
     env:
       CARGO_TERM_COLOR: always
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup Rust toolchain
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ matrix.rust }}
-          profile: minimal
-          override: true
-
-      - name: Cache Cargo registry
-        uses: actions-rs/cache@v1
-        with:
-          cache: registry
-
-      - name: Cache Cargo build
-        uses: actions-rs/cache@v1
-        with:
-          cache: cargo
-
-      - name: Install nightly components (clippy)
-        if: matrix.rust == 'stable'
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
           components: clippy
 
-      - name: Rust cargo check        run: cargo check -p jarvis-core
+      - name: Cache Cargo registry and build
+        uses: Swatinem/rust-cache@v2
 
-      - name: Rust cargo test        run: cargo test -p jarvis-core
+      - name: Rust cargo check
+        run: cargo check -p jarvis-core
 
-      - name: Rust cargo clippy (allow warnings)        run: cargo clippy -p jarvis-core --all-targets -- -D warnings
+      - name: Rust cargo test
+        run: cargo test -p jarvis-core
 
-      - name: Rust cargo build (workspace)        run: cargo build --workspace
+      - name: Rust cargo clippy (warnings are errors)
+        run: cargo clippy -p jarvis-core --all-targets -- -D warnings
 
-      - name: Setup Node.js
+      - name: Rust cargo build (workspace)
+        run: cargo build --workspace
+
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 20
           cache: npm
 
       - name: Install dependencies
@@ -88,24 +68,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo registry
-        uses: actions-rs/cache@v1
-        with:
-          cache: registry
+      - name: Cache Cargo registry and build
+        uses: Swatinem/rust-cache@v2
 
-      - name: Cache Cargo build
-        uses: actions-rs/cache@v1
-        with:
-          cache: cargo
-
-      - name: Install front-end dependencies
+      - name: Install front-end dependencies
         run: npm ci
 
       - name: Check Tauri build config
