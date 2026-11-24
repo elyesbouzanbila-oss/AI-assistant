@@ -258,10 +258,17 @@ If nothing is intelligible, reply with nothing at all.";
 
 pub struct LlmClient {
     http: reqwest::Client,
+    chat: Target,
+    /// Voice may live on a different endpoint and key than chat: a local model
+    /// for conversation with cloud transcription, for instance.
+    voice: Target,
+}
+
+/// One endpoint, key and model. Chat and voice each have their own.
+struct Target {
     url: String,
     api_key: String,
     model: String,
-    stt_model: String,
 }
 
 impl LlmClient {
@@ -284,15 +291,21 @@ impl LlmClient {
 
         Self {
             http,
-            url: config.chat_completions_url(),
-            api_key: config.api_key.clone(),
-            model: config.model.clone(),
-            stt_model: config.transcription_model().to_string(),
+            chat: Target {
+                url: config.chat_completions_url(),
+                api_key: config.api_key.clone(),
+                model: config.model.clone(),
+            },
+            voice: Target {
+                url: config.transcription_url(),
+                api_key: config.transcription_key().to_string(),
+                model: config.transcription_model().to_string(),
+            },
         }
     }
 
     pub fn model(&self) -> &str {
-        &self.model
+        &self.chat.model
     }
 
     /// One streamed completion. `on_delta` receives text as it arrives so the
@@ -303,7 +316,7 @@ impl LlmClient {
         tools: &[Value],
         on_delta: &mut (dyn FnMut(&str) + Send),
     ) -> Result<Completion> {
-        self.request(&self.model, 0.3, messages, tools, on_delta)
+        self.request(&self.chat, 0.3, messages, tools, on_delta)
             .await
     }
 
@@ -315,8 +328,15 @@ impl LlmClient {
         let mut sink = |_: &str| {};
 
         let completion = self
-            .request(&self.stt_model, 0.0, &[message], &[], &mut sink)
-            .await?;
+            .request(&self.voice, 0.0, &[message], &[], &mut sink)
+            .await
+            .with_context(|| {
+                format!(
+                    "voice transcription failed with {} at {}. If that model cannot take \
+                     audio input, set JARVIS_STT_MODEL to one that can",
+                    self.voice.model, self.voice.url
+                )
+            })?;
 
         let text = completion
             .content
@@ -332,14 +352,14 @@ impl LlmClient {
 
     async fn request(
         &self,
-        model: &str,
+        target: &Target,
         temperature: f32,
         messages: &[ChatMessage],
         tools: &[Value],
         on_delta: &mut (dyn FnMut(&str) + Send),
     ) -> Result<Completion> {
         let mut body = json!({
-            "model": model,
+            "model": target.model,
             "messages": messages,
             "stream": true,
             "temperature": temperature,
@@ -349,14 +369,17 @@ impl LlmClient {
             body["tool_choice"] = Value::String("auto".to_string());
         }
 
-        let response = self
-            .http
-            .post(&self.url)
-            .bearer_auth(&self.api_key)
+        let mut request = self.http.post(&target.url);
+        // A loopback server such as Ollama takes no credentials, and an empty
+        // bearer token is worse than sending none at all.
+        if !target.api_key.trim().is_empty() {
+            request = request.bearer_auth(&target.api_key);
+        }
+        let response = request
             .json(&body)
             .send()
             .await
-            .with_context(|| format!("could not reach {}", self.url))?;
+            .with_context(|| format!("could not reach {}", target.url))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -365,7 +388,7 @@ impl LlmClient {
             bail!(
                 "model endpoint returned {status}. Check JARVIS_BASE_URL, JARVIS_MODEL ({}), \
                  and that the key is valid. Response: {snippet}",
-                model
+                target.model
             );
         }
 
