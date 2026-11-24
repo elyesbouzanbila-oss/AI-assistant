@@ -1,0 +1,115 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - stable
+        node:
+          - 20
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          profile: minimal
+          override: true
+
+      - name: Cache Cargo registry
+        uses: actions-rs/cargo@v1
+        with:
+          cache: registry
+
+      - name: Cache Cargo build
+        uses: actions-rs/cargo@v1
+        with:
+          cache: cargo
+
+      - name: Install nightly components (clippy)
+        if: matrix.rust == 'stable'
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Rust cargo check
+        run: cargo check -p jarvis-core
+
+      - name: Rust cargo test
+        run: cargo test -p jarvis-core
+
+      - name: Rust cargo clippy (allow warnings)
+        run: cargo clippy -p jarvis-core --all-targets -- -D warnings
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Vite build
+        run: npm run build
+
+      - name: Publish to GitHub Pages (optional)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./preview
+          keep_files: false
+          external_user_token: ${{ secrets.GH_PAGES_TOKEN }}
+
+  tauri-check:
+    name: Tauri App Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Cache Cargo registry
+        uses: actions-rs/cargo@v1
+        with:
+          cache: registry
+
+      - name: Cache Cargo build
+        uses: actions-rs/cargo@v1
+        with:
+          cache: cargo
+
+      - name: Install front-end dependencies
+        run: npm ci
+
+      - name: Check Tauri build config
+        run: |
+          ls src-tauri/tauri.conf.json
+          cat src-tauri/tauri.conf.json
