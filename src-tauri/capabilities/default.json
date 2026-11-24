@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The island may talk to the app's own commands and events. No shell, no filesystem plugin, no network plugin.",
+  "windows": ["island"],
+  "permissions": ["core:default"]
+}
