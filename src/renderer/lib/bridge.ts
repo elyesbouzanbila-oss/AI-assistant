@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { BridgeEvent, ConfirmRequest, Phase } from "./types";
+import type {
+  BridgeEvent,
+  ConfirmRequest,
+  Phase,
+  SettingsDraft,
+  SettingsView,
+} from "./types";
 
 /**
  * True when running inside the Tauri shell. In that case every call goes to
@@ -109,6 +115,42 @@ export async function stopDictation(): Promise<string> {
   return "Open Notepad and type a summary of my screen";
 }
 
+export async function getSettings(): Promise<SettingsView> {
+  if (isLive) {
+    return invoke<SettingsView>("get_settings");
+  }
+  await sleep(200);
+  return { ...demoSettings };
+}
+
+/**
+ * Saves and applies at once. A rejected configuration comes back in
+ * `view.error` rather than as a rejection, so the panel keeps the typed values.
+ */
+export async function saveSettings(
+  draft: SettingsDraft,
+): Promise<SettingsView> {
+  if (isLive) {
+    return invoke<SettingsView>("save_settings", { draft });
+  }
+  await sleep(450);
+  const error = draft.baseUrl.trim().startsWith("http")
+    ? null
+    : "The endpoint must start with http:// or https://.";
+  demoSettings = {
+    ...demoSettings,
+    baseUrl: draft.baseUrl,
+    model: draft.model,
+    maxSteps: draft.maxSteps,
+    sttModel: draft.sttModel,
+    sttBaseUrl: draft.sttBaseUrl,
+    hasApiKey: demoSettings.hasApiKey || Boolean(draft.apiKey.trim()),
+    hasSttApiKey: demoSettings.hasSttApiKey || Boolean(draft.sttApiKey.trim()),
+    error,
+  };
+  return { ...demoSettings };
+}
+
 export async function cancel(): Promise<void> {
   if (!isLive) {
     demoPending.forEach((resolve) => resolve(false));
@@ -124,7 +166,9 @@ export async function cancel(): Promise<void> {
  * changes. Everything else is driven by Rust so the UI cannot disagree with
  * what the agent is actually doing.
  */
-export async function setPhase(phase: Extract<Phase, "idle" | "open">): Promise<void> {
+export async function setPhase(
+  phase: Extract<Phase, "idle" | "open" | "settings">,
+): Promise<void> {
   if (!isLive) return;
   await invoke("ui_phase", { phase });
 }
@@ -134,6 +178,18 @@ export async function setPhase(phase: Extract<Phase, "idle" | "open">): Promise<
 // ---------------------------------------------------------------------------
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+let demoSettings: SettingsView = {
+  baseUrl: "https://openrouter.ai/api/v1",
+  model: "google/gemini-2.5-flash",
+  maxSteps: 8,
+  sttModel: "",
+  sttBaseUrl: "",
+  hasApiKey: true,
+  hasSttApiKey: false,
+  envLocked: [],
+  error: null,
+};
 
 function askDemo(request: Omit<ConfirmRequest, "id">): Promise<boolean> {
   const id = `demo-${Math.random().toString(36).slice(2)}`;

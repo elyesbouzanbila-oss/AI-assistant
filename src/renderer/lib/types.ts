@@ -1,4 +1,11 @@
-export type Phase = "idle" | "open" | "working" | "confirm" | "done" | "error";
+export type Phase =
+  | "idle"
+  | "open"
+  | "settings"
+  | "working"
+  | "confirm"
+  | "done"
+  | "error";
 
 export interface ConfirmRequest {
   id: string;
@@ -24,10 +31,40 @@ export interface ChatLine {
   text: string;
 }
 
+/**
+ * What the settings panel may see. It never carries a key: only whether one is
+ * stored, so the field starts blank and typing replaces it.
+ */
+export interface SettingsView {
+  baseUrl: string;
+  model: string;
+  maxSteps: number;
+  sttModel: string;
+  sttBaseUrl: string;
+  hasApiKey: boolean;
+  hasSttApiKey: boolean;
+  /** Variables set in `.env`; those fields are read-only until removed there. */
+  envLocked: string[];
+  /** Why the saved configuration was rejected, if it was. */
+  error: string | null;
+}
+
+export interface SettingsDraft {
+  baseUrl: string;
+  model: string;
+  maxSteps: number;
+  sttModel: string;
+  sttBaseUrl: string;
+  /** Blank keeps the stored key. */
+  apiKey: string;
+  sttApiKey: string;
+}
+
 /** Pixel size of the island per phase. Mirrored in src-tauri/src/island.rs. */
 export const PHASE_SIZE: Record<Phase, { w: number; h: number }> = {
   idle: { w: 232, h: 48 },
   open: { w: 560, h: 248 },
+  settings: { w: 560, h: 452 },
   working: { w: 560, h: 96 },
   confirm: { w: 560, h: 172 },
   done: { w: 560, h: 72 },

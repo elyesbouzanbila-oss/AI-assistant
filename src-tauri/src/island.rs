@@ -23,6 +23,7 @@ pub fn size_for(phase: &str) -> (f64, f64) {
     match phase {
         "idle" => (232.0, 48.0),
         "open" => (560.0, 248.0),
+        "settings" => (560.0, 452.0),
         "working" => (560.0, 96.0),
         "confirm" => (560.0, 172.0),
         "done" => (560.0, 72.0),
@@ -75,10 +76,8 @@ pub fn spawn_passthrough_loop(window: WebviewWindow) {
             std::thread::sleep(Duration::from_millis(delay));
 
             if !IDLE.load(Ordering::SeqCst) {
-                if ignoring {
-                    if window.set_ignore_cursor_events(false).is_ok() {
-                        ignoring = false;
-                    }
+                if ignoring && window.set_ignore_cursor_events(false).is_ok() {
+                    ignoring = false;
                 }
                 continue;
             }
