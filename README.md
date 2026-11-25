@@ -18,11 +18,23 @@ no Node process at runtime.
 
 ```bash
 npm install
-cp .env.example .env        # then add JARVIS_API_KEY (and model, if not GLM)
 npm run app                 # dev build: vite + cargo tauri dev
 ```
 
+Then open the island (hover it or press **Ctrl+Space**), click the gear icon and fill in
+the endpoint, model and API key. That is the whole setup — no file to edit.
+
 `npm run bundle` produces an `.msi` / `.exe` installer in `target/release/bundle/`.
+
+## Settings
+
+Everything is in the island's gear menu and saved to `~/Jarvis/settings.json`: endpoint,
+model, API key, max steps, and the optional voice model / endpoint / key. **Saving applies
+immediately** — no restart.
+
+`.env` still works and takes precedence, so an existing setup keeps running and the fields
+it controls show an `env` tag. `.env.example` documents every variable, including the few
+things the panel deliberately leaves out (OpenRouter's `JARVIS_SITE_URL`).
 
 ### Choosing a model
 
@@ -116,8 +128,9 @@ whether transcription succeeds or not.
 - Model-supplied text is passed to PowerShell as an environment variable, never interpolated into
   the script, so a prompt injection cannot become a command injection.
 - Every action is appended to `~/Jarvis/audit.log` (JSONL) with a timestamp and outcome.
-- The API key lives in `.env`, read only by the Rust process; the webview never sees it, and it is
-  never written to the audit log.
+- The API key lives in `~/Jarvis/settings.json` or `.env`, read only by the Rust process. The
+  webview learns only whether a key is stored, never its value, and the key is never written to
+  the audit log.
 
 ## Layout
 

@@ -20,7 +20,7 @@ Everything that touches the OS sits behind the `Platform` trait
 | Change | File |
 |---|---|
 | Assistant tone, rules, capabilities | `system_prompt()` in `crates/jarvis-core/src/agent/mod.rs` |
-| Env parsing, validation, key resolution | `crates/jarvis-core/src/config.rs` |
+| Env/settings.json parsing, validation, key resolution | `crates/jarvis-core/src/config.rs` |
 | Request shape, streaming, transcription | `crates/jarvis-core/src/llm.rs` |
 | Tool schemas, execution, chip summaries | `crates/jarvis-core/src/tools/mod.rs` |
 | Approval rules, blocked apps | `crates/jarvis-core/src/policy.rs` |
@@ -30,7 +30,16 @@ Everything that touches the OS sits behind the `Platform` trait
 
 ## Configuration
 
-Read once at startup by `Config::load()` — **changing `.env` needs a restart**.
+Resolved by `Config::load()` from the environment and from `~/Jarvis/settings.json`.
+The island's settings panel (gear icon in the open state) writes that file and rebuilds
+the runtime, so an endpoint, model or key change applies without a restart. **Editing
+`.env` still needs a restart.**
+
+Precedence is **environment > `settings.json` > default**. `.env` therefore keeps an
+existing setup working, and the panel shows those fields read-only with an `env` tag
+(`config::env_locked_names`) rather than saving an edit the next start would override.
+`resolve_with` takes the environment lookup as an argument so precedence stays testable
+without mutating the real environment; keep that seam.
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -42,6 +51,10 @@ Read once at startup by `Config::load()` — **changing `.env` needs a restart**
 | `JARVIS_STT_MODEL` | `JARVIS_MODEL` | voice; must accept audio input |
 | `JARVIS_STT_BASE_URL` | `JARVIS_BASE_URL` | separate voice endpoint |
 | `JARVIS_STT_API_KEY` | — | required when `JARVIS_STT_BASE_URL` differs |
+
+All eight can also be set in the settings panel; the file it writes is
+`~/Jarvis/settings.json` (pretty-printed JSON, gitignored by location, not encrypted).
+`JARVIS_SITE_URL` is the one value the panel does not expose.
 
 Resolution rules that are easy to break:
 
@@ -56,6 +69,10 @@ Resolution rules that are easy to break:
   `/audio/transcriptions` — so a Whisper-only service will not work by setting a URL.
 - OpenRouter attribution headers are added only when the base URL host is
   `openrouter.ai`; no other endpoint may receive `HTTP-Referer`.
+- **A stored key never travels back to the webview.** `SettingsView` carries
+  `hasApiKey` / `hasSttApiKey` booleans, never values, so the panel's key field starts
+  blank and a blank field on save means "keep the stored key". Do not add a getter that
+  returns keys, and do not echo one back in an error message.
 
 ## Commands
 
@@ -139,7 +156,8 @@ actual executable is the deliverable.
 
 ## Secrets
 
-`.env` holds `JARVIS_API_KEY` and `JARVIS_STT_API_KEY` and is gitignored. Both are
-read by the Rust process only: never log them, never send them to the webview, never
-write them to the audit log, and never print them in chat or commit them.
+`~/Jarvis/settings.json` (written by the settings panel) and `.env` hold
+`JARVIS_API_KEY` and `JARVIS_STT_API_KEY`. Both files are read by the Rust process only:
+never log the keys, never send them to the webview, never write them to the audit log,
+and never print them in chat or commit them.
 `.env.example` is the template, and `.env` must never be copied into one.

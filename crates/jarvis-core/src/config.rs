@@ -2,11 +2,13 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
-/// Runtime configuration, read once at startup from the environment.
+/// Runtime configuration, resolved at startup from the environment and from
+/// `~/Jarvis/settings.json` (written by the island's settings panel).
 ///
-/// The API key lives only in this process: it is never sent to the webview and
-/// never written into a log.
+/// The API key never leaves the Rust process: it is never sent to the webview
+/// and never written into a log.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// OpenAI-compatible base URL, e.g. `https://api.openai.com/v1`.
@@ -35,39 +37,22 @@ impl Config {
     pub fn load() -> Result<Self> {
         let _ = dotenvy::dotenv();
 
-        let base_url = env::var("JARVIS_BASE_URL")
-            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string())
-            .trim_end_matches('/')
-            .to_string();
-
-        let api_key = env::var("JARVIS_API_KEY").unwrap_or_default();
-
-        let model = env::var("JARVIS_MODEL")
-            .unwrap_or_else(|_| "gpt-4o-mini".to_string())
-            .trim()
-            .to_string();
-
-        let max_steps = env::var("JARVIS_MAX_STEPS")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(8)
-            .clamp(1, 24);
+        let resolved = resolve(&load_settings()?);
 
         let workspace = jarvis_dir()?.join("workspace");
         std::fs::create_dir_all(&workspace)
             .with_context(|| format!("could not create workspace at {}", workspace.display()))?;
 
         let config = Self {
-            base_url,
-            api_key,
-            model,
-            max_steps,
+            base_url: resolved.base_url,
+            api_key: resolved.api_key,
+            model: resolved.model,
+            max_steps: resolved.max_steps,
             workspace,
-            site_url: env::var("JARVIS_SITE_URL").ok(),
-            stt_model: optional_env("JARVIS_STT_MODEL"),
-            stt_base_url: optional_env("JARVIS_STT_BASE_URL")
-                .map(|value| value.trim_end_matches('/').to_string()),
-            stt_api_key: optional_env("JARVIS_STT_API_KEY"),
+            site_url: resolved.site_url,
+            stt_model: resolved.stt_model,
+            stt_base_url: resolved.stt_base_url,
+            stt_api_key: resolved.stt_api_key,
         };
         config.validate()?;
         Ok(config)
@@ -134,9 +119,9 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.api_key.trim().is_empty() && !self.is_local() {
             anyhow::bail!(
-                "JARVIS_API_KEY is not set. Copy .env.example to .env and add a key \
-                 (OpenRouter by default) for an endpoint that supports tool calling and image input. \
-                 A local endpoint such as Ollama (http://localhost:11434/v1) needs no key."
+                "no API key. Open Settings (the gear icon) and add one for an endpoint that \
+                 supports tool calling and image input. A local endpoint such as Ollama \
+                 (http://localhost:11434/v1) needs no key."
             );
         }
         if self.model.trim().is_empty() {
@@ -148,7 +133,7 @@ impl Config {
         if self.transcription_key().trim().is_empty() && !is_loopback(self.transcription_base_url())
         {
             anyhow::bail!(
-                "voice transcription points at {} but has no key. Set JARVIS_STT_API_KEY \
+                "voice transcription points at {} but has no key. Add a voice key in Settings \
                  (the chat key is not sent to a different endpoint).",
                 self.transcription_base_url()
             );
@@ -184,7 +169,148 @@ impl Config {
     }
 }
 
-/// `~/Jarvis` - workspace, audit log and future settings live here.
+/// Values persisted by the settings panel in `~/Jarvis/settings.json`.
+///
+/// Every field is optional: a value left out falls back to the environment and
+/// then to the built-in default. Nothing here re-encrypts a key; it is plain
+/// JSON in the user's home directory, the same trust level as `.env`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub max_steps: Option<usize>,
+    pub site_url: Option<String>,
+    pub stt_model: Option<String>,
+    pub stt_base_url: Option<String>,
+    pub stt_api_key: Option<String>,
+}
+
+/// `Config`'s inputs after precedence, before validation.
+///
+/// Kept separate from `Config` so the settings panel can show and edit a
+/// half-filled form that `validate` would reject (the first-run case).
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub max_steps: usize,
+    pub site_url: Option<String>,
+    pub stt_model: Option<String>,
+    pub stt_base_url: Option<String>,
+    pub stt_api_key: Option<String>,
+}
+
+/// Variables that override the settings file.
+pub const ENV_NAMES: [&str; 8] = [
+    "JARVIS_BASE_URL",
+    "JARVIS_API_KEY",
+    "JARVIS_MODEL",
+    "JARVIS_MAX_STEPS",
+    "JARVIS_SITE_URL",
+    "JARVIS_STT_MODEL",
+    "JARVIS_STT_BASE_URL",
+    "JARVIS_STT_API_KEY",
+];
+
+/// Resolve settings exactly as `Config::load` does, but without validating.
+pub fn resolve(settings: &Settings) -> Resolved {
+    resolve_with(settings, optional_env)
+}
+
+/// The seam that keeps precedence testable without touching the real environment.
+fn resolve_with(settings: &Settings, env: impl Fn(&str) -> Option<String>) -> Resolved {
+    // Environment first, then the file, then the default: an existing `.env`
+    // keeps working and the panel flags the fields it overrides.
+    let value = |name: &str, from_file: Option<String>| {
+        env(name)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                from_file
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+    };
+
+    Resolved {
+        base_url: value("JARVIS_BASE_URL", settings.base_url.clone())
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
+            .trim_end_matches('/')
+            .to_string(),
+        api_key: value("JARVIS_API_KEY", settings.api_key.clone()).unwrap_or_default(),
+        model: value("JARVIS_MODEL", settings.model.clone())
+            .unwrap_or_else(|| "gpt-4o-mini".to_string())
+            .trim()
+            .to_string(),
+        max_steps: value(
+            "JARVIS_MAX_STEPS",
+            settings.max_steps.map(|steps| steps.to_string()),
+        )
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(8)
+        .clamp(1, 24),
+        site_url: value("JARVIS_SITE_URL", settings.site_url.clone()),
+        stt_model: value("JARVIS_STT_MODEL", settings.stt_model.clone()),
+        stt_base_url: value("JARVIS_STT_BASE_URL", settings.stt_base_url.clone())
+            .map(|value| value.trim_end_matches('/').to_string()),
+        stt_api_key: value("JARVIS_STT_API_KEY", settings.stt_api_key.clone()),
+    }
+}
+
+/// Variables set in the environment (including `.env`): the panel shows those
+/// fields read-only, because they win over anything it could save.
+pub fn env_locked_names() -> Vec<&'static str> {
+    ENV_NAMES
+        .into_iter()
+        .filter(|name| optional_env(name).is_some())
+        .collect()
+}
+
+pub fn settings_path() -> Result<PathBuf> {
+    Ok(jarvis_dir()?.join("settings.json"))
+}
+
+pub fn load_settings() -> Result<Settings> {
+    read_settings_at(&settings_path()?)
+}
+
+pub fn save_settings(settings: &Settings) -> Result<()> {
+    write_settings_at(&settings_path()?, settings)
+}
+
+/// A missing file is an empty configuration; a corrupt one is an error, because
+/// silently starting over would drop the saved key without saying so.
+fn read_settings_at(path: &Path) -> Result<Settings> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Settings::default());
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not read {}", path.display()));
+        }
+    };
+    serde_json::from_str(&text).with_context(|| {
+        format!(
+            "{} is not valid settings JSON; fix or delete it",
+            path.display()
+        )
+    })
+}
+
+fn write_settings_at(path: &Path, settings: &Settings) -> Result<()> {
+    let text = serde_json::to_string_pretty(settings).context("could not encode settings")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("could not create {}", parent.display()))?;
+    }
+    std::fs::write(path, text).with_context(|| format!("could not write {}", path.display()))
+}
+
+/// `~/Jarvis` - workspace, audit log and settings live here.
 pub fn jarvis_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("could not locate the home directory")?;
     let dir = home.join("Jarvis");
@@ -431,5 +557,98 @@ mod tests {
             assert!(described.contains("***"));
             assert!(!described.contains(key));
         }
+    }
+
+    #[test]
+    fn a_missing_settings_file_is_an_empty_configuration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let settings = read_settings_at(&path).unwrap();
+        assert!(settings.base_url.is_none());
+        assert!(settings.api_key.is_none());
+    }
+
+    #[test]
+    fn settings_round_trip_through_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/settings.json");
+        let settings = Settings {
+            base_url: Some("https://openrouter.ai/api/v1".into()),
+            api_key: Some("sk-or-v1-test".into()),
+            model: Some("google/gemini-2.5-flash".into()),
+            max_steps: Some(12),
+            ..Settings::default()
+        };
+
+        write_settings_at(&path, &settings).unwrap();
+        let loaded = read_settings_at(&path).unwrap();
+
+        assert_eq!(loaded.base_url, settings.base_url);
+        assert_eq!(loaded.api_key, settings.api_key);
+        assert_eq!(loaded.model, settings.model);
+        assert_eq!(loaded.max_steps, Some(12));
+        assert!(loaded.stt_model.is_none());
+    }
+
+    #[test]
+    fn a_corrupt_settings_file_is_reported_rather_than_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        assert!(read_settings_at(&path).is_err());
+    }
+
+    #[test]
+    fn the_environment_beats_the_saved_file() {
+        let settings = Settings {
+            model: Some("saved-model".into()),
+            ..Settings::default()
+        };
+
+        let from_env = resolve_with(&settings, |name| {
+            (name == "JARVIS_MODEL").then(|| "env-model".to_string())
+        });
+        assert_eq!(from_env.model, "env-model");
+
+        let from_file = resolve_with(&settings, |_| None);
+        assert_eq!(from_file.model, "saved-model");
+    }
+
+    #[test]
+    fn resolve_applies_defaults_and_clamps_saved_steps() {
+        let resolved = resolve_with(
+            &Settings {
+                api_key: Some("   ".into()),
+                max_steps: Some(999),
+                ..Settings::default()
+            },
+            |_| None,
+        );
+
+        assert_eq!(resolved.base_url, "https://api.openai.com/v1");
+        assert_eq!(resolved.model, "gpt-4o-mini");
+        assert_eq!(resolved.max_steps, 24);
+        assert_eq!(resolved.api_key, "", "blank is not a key");
+    }
+
+    #[test]
+    fn a_saved_local_endpoint_still_needs_no_key() {
+        let resolved = resolve_with(
+            &Settings {
+                base_url: Some("http://localhost:11434/v1/".into()),
+                model: Some("qwen2.5vl".into()),
+                ..Settings::default()
+            },
+            |_| None,
+        );
+
+        let config = Config::new(
+            resolved.base_url,
+            resolved.api_key,
+            resolved.model,
+            "/tmp/ws",
+        );
+        assert!(config.is_local());
+        assert!(config.validate().is_ok());
     }
 }

@@ -1,15 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   ask,
   cancel,
   confirm,
+  getSettings,
   isLive,
+  saveSettings,
   setPhase as pushPhase,
   startDictation,
   stopDictation,
   subscribe,
 } from "./lib/bridge";
-import type { BridgeEvent, ChatLine, ConfirmRequest, Phase } from "./lib/types";
+import type {
+  BridgeEvent,
+  ChatLine,
+  ConfirmRequest,
+  Phase,
+  SettingsDraft,
+  SettingsView,
+} from "./lib/types";
 
 const COLLAPSE_MS = 2600;
 /** Matches `MAX_SECONDS` in crates/jarvis-core/src/platform/recorder.rs. */
@@ -24,6 +34,7 @@ const SUGGESTIONS = [
 const STATUS: Record<Phase, string> = {
   idle: "",
   open: "Ready",
+  settings: "Settings",
   working: "Working",
   confirm: "Needs your OK",
   done: "Done",
@@ -39,6 +50,10 @@ export function Island() {
   const [notice, setNotice] = useState("");
   const [dictating, setDictating] = useState(false);
   const [voiceNote, setVoiceNote] = useState("");
+  const [settings, setSettings] = useState<SettingsView | null>(null);
+  const [form, setForm] = useState<SettingsDraft | null>(null);
+  const [settingsNote, setSettingsNote] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -61,6 +76,36 @@ export function Island() {
     setPending(null);
     setPhase("idle");
   }, []);
+
+  const closeSettings = useCallback(() => {
+    setForm(null);
+    setSettings(null);
+    setSettingsNote("");
+    void pushPhase("open");
+    setPhase("open");
+  }, []);
+
+  const openSettings = async () => {
+    clearCollapse();
+    setSettingsNote("");
+    setPhase("settings");
+    void pushPhase("settings");
+    try {
+      const view = await getSettings();
+      setSettings(view);
+      setForm({
+        baseUrl: view.baseUrl,
+        model: view.model,
+        maxSteps: view.maxSteps,
+        sttModel: view.sttModel,
+        sttBaseUrl: view.sttBaseUrl,
+        apiKey: "",
+        sttApiKey: "",
+      });
+    } catch (error) {
+      setSettingsNote(String(error));
+    }
+  };
 
   const setRecording = (on: boolean) => {
     dictatingRef.current = on;
@@ -198,13 +243,17 @@ export function Island() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
+      if (phase === "settings") {
+        closeSettings();
+        return;
+      }
       if (dictatingRef.current) void finishDictation(false);
       void cancel();
       collapse();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [collapse, finishDictation]);
+  }, [closeSettings, collapse, finishDictation, phase]);
 
   const open = () => {
     clearCollapse();
@@ -229,6 +278,29 @@ export function Island() {
     streamingId.current = null;
     void ask(text);
   };
+
+  const edit = (patch: Partial<SettingsDraft>) => {
+    setForm((prev) => (prev ? { ...prev, ...patch } : prev));
+    setSettings((prev) => (prev?.error ? { ...prev, error: null } : prev));
+    setSettingsNote("");
+  };
+
+  const submitSettings = async () => {
+    if (!form || saving) return;
+    setSaving(true);
+    try {
+      const view = await saveSettings(form);
+      setSettings(view);
+      setForm({ ...form, apiKey: "", sttApiKey: "" });
+      setSettingsNote(view.error ? "" : "Saved. The new settings are live.");
+    } catch (error) {
+      setSettingsNote(String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const envLocked = (name: string) => settings?.envLocked.includes(name) ?? false;
 
   const decide = (allow: boolean) => {
     if (!pending) return;
@@ -261,13 +333,166 @@ export function Island() {
           </div>
           {phase === "idle" && <span className="hint">Ctrl+Space</span>}
           {phase === "open" && (
-            <button className="icon" onClick={close} aria-label="Close">
-              &times;
-            </button>
+            <div className="bar-actions">
+              <button
+                className="icon"
+                onClick={() => void openSettings()}
+                aria-label="Settings"
+                title="Settings"
+              >
+                <GearIcon />
+              </button>
+              <button className="icon" onClick={close} aria-label="Close">
+                &times;
+              </button>
+            </div>
+          )}
+          {phase === "settings" && (
+            <div className="bar-actions">
+              <button
+                className="icon"
+                onClick={closeSettings}
+                aria-label="Back to chat"
+                title="Back to chat"
+              >
+                &times;
+              </button>
+            </div>
           )}
         </header>
 
         <div className="body">
+          {phase === "settings" && (
+            <form
+              className="settings"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitSettings();
+              }}
+            >
+              <Field label="Endpoint" locked={envLocked("JARVIS_BASE_URL")}>
+                <input
+                  value={form?.baseUrl ?? ""}
+                  onChange={(event) => edit({ baseUrl: event.target.value })}
+                  placeholder="https://openrouter.ai/api/v1"
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={envLocked("JARVIS_BASE_URL")}
+                />
+              </Field>
+
+              <div className="field-row">
+                <Field label="Model" locked={envLocked("JARVIS_MODEL")}>
+                  <input
+                    value={form?.model ?? ""}
+                    onChange={(event) => edit({ model: event.target.value })}
+                    placeholder="google/gemini-2.5-flash"
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={envLocked("JARVIS_MODEL")}
+                  />
+                </Field>
+                <Field label="Steps" locked={envLocked("JARVIS_MAX_STEPS")}>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={form?.maxSteps ?? 8}
+                    onChange={(event) =>
+                      edit({
+                        maxSteps: Math.min(
+                          24,
+                          Math.max(1, Number(event.target.value) || 1),
+                        ),
+                      })
+                    }
+                    disabled={envLocked("JARVIS_MAX_STEPS")}
+                  />
+                </Field>
+              </div>
+
+              <Field label="API key" locked={envLocked("JARVIS_API_KEY")}>
+                <input
+                  type="password"
+                  value={form?.apiKey ?? ""}
+                  onChange={(event) => edit({ apiKey: event.target.value })}
+                  placeholder={
+                    settings?.hasApiKey
+                      ? "saved - type to replace it"
+                      : "sk-or-v1-..."
+                  }
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={envLocked("JARVIS_API_KEY")}
+                />
+              </Field>
+
+              <div className="settings-section">
+                Voice <span>optional</span>
+              </div>
+
+              <div className="field-row voice">
+                <Field label="Voice model" locked={envLocked("JARVIS_STT_MODEL")}>
+                  <input
+                    value={form?.sttModel ?? ""}
+                    onChange={(event) => edit({ sttModel: event.target.value })}
+                    placeholder="same as the model above"
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={envLocked("JARVIS_STT_MODEL")}
+                  />
+                </Field>
+                <Field
+                  label="Voice endpoint"
+                  locked={envLocked("JARVIS_STT_BASE_URL")}
+                >
+                  <input
+                    value={form?.sttBaseUrl ?? ""}
+                    onChange={(event) => edit({ sttBaseUrl: event.target.value })}
+                    placeholder="same as the endpoint above"
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={envLocked("JARVIS_STT_BASE_URL")}
+                  />
+                </Field>
+              </div>
+
+              <Field label="Voice key" locked={envLocked("JARVIS_STT_API_KEY")}>
+                <input
+                  type="password"
+                  value={form?.sttApiKey ?? ""}
+                  onChange={(event) => edit({ sttApiKey: event.target.value })}
+                  placeholder={
+                    settings?.hasSttApiKey
+                      ? "saved - type to replace it"
+                      : "only needed for a separate voice endpoint"
+                  }
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={envLocked("JARVIS_STT_API_KEY")}
+                />
+              </Field>
+
+              <div className="settings-foot">
+                <span
+                  className="settings-note"
+                  data-tone={
+                    settings?.error ? "bad" : settingsNote ? "ok" : undefined
+                  }
+                >
+                  {settings?.error ?? settingsNote}
+                </span>
+                <button
+                  type="submit"
+                  className="allow"
+                  disabled={saving || !form}
+                >
+                  {saving ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </form>
+          )}
+
           {phase === "open" && (
             <>
               <div className="log" ref={logRef}>
@@ -387,6 +612,52 @@ export function Island() {
         </div>
       )}
     </>
+  );
+}
+
+function Field({
+  label,
+  locked,
+  children,
+}: {
+  label: string;
+  locked: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <label className="field">
+      <span className="field-label">
+        {label}
+        {locked && (
+          <span
+            className="field-lock"
+            title="Set in .env, which wins. Remove it there to edit it here."
+          >
+            env
+          </span>
+        )}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6h.09A1.7 1.7 0 0 0 10.1 3.05V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z" />
+    </svg>
   );
 }
 
