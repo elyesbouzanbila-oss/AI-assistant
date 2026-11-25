@@ -406,17 +406,14 @@ impl LlmClient {
         }
 
         let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
+        let mut buffer: Vec<u8> = Vec::new();
         let mut acc = Acc::default();
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.context("stream interrupted")?;
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.extend_from_slice(&chunk);
 
-            while let Some(newline) = buffer.find('\n') {
-                let line = buffer[..newline].trim_end_matches('\r').to_string();
-                buffer.drain(..=newline);
-
+            for line in take_lines(&mut buffer) {
                 let Some(payload) = line.strip_prefix("data:") else {
                     continue;
                 };
@@ -470,6 +467,30 @@ impl LlmClient {
             tool_calls,
         })
     }
+}
+
+/// Take the complete lines out of `buffer`, leaving a partial tail behind.
+///
+/// Works on bytes: a chunk boundary can split a multi-byte character, and
+/// decoding each chunk on its own turns that character into U+FFFD.
+fn take_lines(buffer: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (index, byte) in buffer.iter().enumerate() {
+        if *byte != b'\n' {
+            continue;
+        }
+        let mut line = String::from_utf8_lossy(&buffer[start..index]).into_owned();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+        lines.push(line);
+        start = index + 1;
+    }
+    if start > 0 {
+        buffer.drain(..start);
+    }
+    lines
 }
 
 /// A site URL is only usable as `HTTP-Referer` when it parses and has an http(s)
@@ -563,6 +584,32 @@ mod tests {
         assert_eq!(completion.content, "Hello");
         assert_eq!(seen, "Hello");
         assert!(completion.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn lines_split_across_chunks_keep_their_utf8() {
+        let payload = "data: {\"choices\":[{\"delta\":{\"content\":\"héllo \u{1F680}\"}}]}\n\n";
+        let bytes = payload.as_bytes();
+        // Split in the middle of the four-byte emoji: decoding that first chunk
+        // on its own is exactly what used to lose it.
+        let split = payload.find('\u{1F680}').unwrap() + 2;
+        assert!(!String::from_utf8_lossy(&bytes[..split]).contains('\u{1F680}'));
+
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&bytes[..split]);
+        assert!(
+            take_lines(&mut buffer).is_empty(),
+            "a partial line must wait for the rest"
+        );
+
+        buffer.extend_from_slice(&bytes[split..]);
+        let lines = take_lines(&mut buffer);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0],
+            "data: {\"choices\":[{\"delta\":{\"content\":\"héllo \u{1F680}\"}}]}"
+        );
+        assert!(buffer.is_empty());
     }
 
     #[test]
