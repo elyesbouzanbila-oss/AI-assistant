@@ -70,12 +70,13 @@ Resolution rules that are easy to break:
 | `cargo build --workspace` | **the only command that compiles the Windows-only code** |
 | `npm run bundle` | release installers in `target/release/bundle/` |
 
-### The trap: CI does not compile Windows code
+### Where Windows code is compiled
 
-`.github/workflows/ci.yml` runs on `ubuntu-latest` and only checks `-p jarvis-core`,
-so every `#[cfg(windows)]` module — `platform/win.rs`, `platform/recorder.rs` — is
-**never compiled there**. Green CI does not mean the app builds. On Windows, run
-`cargo build --workspace` before claiming anything compiles.
+The `Lint & Test` job runs on `ubuntu-latest`, so it builds the stub backend: no
+`#[cfg(windows)]` module — `platform/win.rs`, `platform/recorder.rs` — compiles there.
+The separate `windows-build` job runs `cargo build --workspace` on `windows-latest` and
+is the only job that compiles them. Do not move that build to Ubuntu: Tauri needs
+GTK/WebKit headers there, and the Windows modules are cfg'd out anyway.
 
 `cargo check` only type-checks and emits no binaries; use `cargo build` when an
 actual executable is the deliverable.
