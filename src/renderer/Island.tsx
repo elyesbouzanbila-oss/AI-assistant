@@ -7,6 +7,7 @@ import {
   getSettings,
   isLive,
   saveSettings,
+  testSettings,
   setPhase as pushPhase,
   startDictation,
   stopDictation,
@@ -24,6 +25,25 @@ import type {
 const COLLAPSE_MS = 2600;
 /** Matches `MAX_SECONDS` in crates/jarvis-core/src/platform/recorder.rs. */
 const DICTATION_MAX_MS = 30_000;
+
+const PRESETS = [
+  {
+    name: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "google/gemini-2.5-flash",
+  },
+  {
+    name: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
+  },
+  {
+    name: "Ollama",
+    baseUrl: "http://localhost:11434/v1",
+    model: "minicpm5:latest",
+  },
+  { name: "Z.ai", baseUrl: "https://api.z.ai/api/paas/v4", model: "glm-4.6v" },
+];
 
 const SUGGESTIONS = [
   "Open Notepad",
@@ -54,6 +74,11 @@ export function Island() {
   const [form, setForm] = useState<SettingsDraft | null>(null);
   const [settingsNote, setSettingsNote] = useState("");
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
+  const [models, setModels] = useState<string[]>([]);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -88,6 +113,7 @@ export function Island() {
   const openSettings = async () => {
     clearCollapse();
     setSettingsNote("");
+    setProbe(null);
     setPhase("settings");
     void pushPhase("settings");
     try {
@@ -103,6 +129,8 @@ export function Island() {
         fallbackModel: view.fallbackModel,
         apiKey: "",
         sttApiKey: "",
+        clearApiKey: false,
+        clearSttApiKey: false,
       });
     } catch (error) {
       setSettingsNote(String(error));
@@ -285,7 +313,33 @@ export function Island() {
     setForm((prev) => (prev ? { ...prev, ...patch } : prev));
     setSettings((prev) => (prev?.error ? { ...prev, error: null } : prev));
     setSettingsNote("");
+    setProbe(null);
   };
+
+  const runTest = async () => {
+    if (!form || testing) return;
+    setTesting(true);
+    setProbe(null);
+    try {
+      const report = await testSettings(form);
+      setModels(report.models);
+      setProbe({
+        ok: true,
+        text: `reachable in ${report.latencyMs} ms, ${report.models.length} models`,
+      });
+    } catch (error) {
+      setProbe({ ok: false, text: String(error) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const forgetKey = (which: "api" | "stt") =>
+    edit(
+      which === "api"
+        ? { apiKey: "", clearApiKey: true }
+        : { sttApiKey: "", clearSttApiKey: true },
+    );
 
   const submitSettings = async () => {
     if (!form || saving) return;
@@ -293,7 +347,13 @@ export function Island() {
     try {
       const view = await saveSettings(form);
       setSettings(view);
-      setForm({ ...form, apiKey: "", sttApiKey: "" });
+      setForm({
+        ...form,
+        apiKey: "",
+        sttApiKey: "",
+        clearApiKey: false,
+        clearSttApiKey: false,
+      });
       setSettingsNote(view.error ? "" : "Saved. The new settings are live.");
     } catch (error) {
       setSettingsNote(String(error));
@@ -303,6 +363,23 @@ export function Island() {
   };
 
   const envLocked = (name: string) => settings?.envLocked.includes(name) ?? false;
+
+  // Save stays disabled until something actually differs, so a stray click
+  // cannot rewrite the file with the same values.
+  const dirty =
+    !!settings &&
+    !!form &&
+    (form.apiKey.trim() !== "" ||
+      form.sttApiKey.trim() !== "" ||
+      form.clearApiKey ||
+      form.clearSttApiKey ||
+      form.baseUrl !== settings.baseUrl ||
+      form.model !== settings.model ||
+      form.maxSteps !== settings.maxSteps ||
+      form.sttModel !== settings.sttModel ||
+      form.sttBaseUrl !== settings.sttBaseUrl ||
+      form.fallbackBaseUrl !== settings.fallbackBaseUrl ||
+      form.fallbackModel !== settings.fallbackModel);
 
   const decide = (allow: boolean) => {
     if (!pending) return;
@@ -372,6 +449,21 @@ export function Island() {
                 void submitSettings();
               }}
             >
+              <div className="presets">
+                <span className="presets-label">Presets</span>
+                {PRESETS.map((preset) => (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    onClick={() =>
+                      edit({ baseUrl: preset.baseUrl, model: preset.model })
+                    }
+                  >
+                    {preset.name}
+                  </button>
+                ))}
+              </div>
+
               <Field label="Endpoint" locked={envLocked("JARVIS_BASE_URL")}>
                 <input
                   value={form?.baseUrl ?? ""}
@@ -389,6 +481,7 @@ export function Island() {
                     value={form?.model ?? ""}
                     onChange={(event) => edit({ model: event.target.value })}
                     placeholder="google/gemini-2.5-flash"
+                    list="jarvis-models"
                     spellCheck={false}
                     autoComplete="off"
                     disabled={envLocked("JARVIS_MODEL")}
@@ -414,19 +507,35 @@ export function Island() {
               </div>
 
               <Field label="API key" locked={envLocked("JARVIS_API_KEY")}>
-                <input
-                  type="password"
-                  value={form?.apiKey ?? ""}
-                  onChange={(event) => edit({ apiKey: event.target.value })}
-                  placeholder={
-                    settings?.hasApiKey
-                      ? "saved - type to replace it"
-                      : "sk-or-v1-..."
-                  }
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={envLocked("JARVIS_API_KEY")}
-                />
+                <div className="field-with-action">
+                  <input
+                    type="password"
+                    value={form?.apiKey ?? ""}
+                    onChange={(event) =>
+                      edit({ apiKey: event.target.value, clearApiKey: false })
+                    }
+                    placeholder={
+                      settings?.hasApiKey && !form?.clearApiKey
+                        ? "saved - type to replace it"
+                        : form?.clearApiKey
+                          ? "saved key will be removed"
+                          : "sk-or-v1-..."
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={envLocked("JARVIS_API_KEY")}
+                  />
+                  {settings?.hasApiKey && !form?.clearApiKey && (
+                    <button
+                      type="button"
+                      className="field-action"
+                      onClick={() => forgetKey("api")}
+                      title="Remove the saved key when you save"
+                    >
+                      Forget
+                    </button>
+                  )}
+                </div>
               </Field>
 
               <div className="settings-section">
@@ -460,19 +569,35 @@ export function Island() {
               </div>
 
               <Field label="Voice key" locked={envLocked("JARVIS_STT_API_KEY")}>
-                <input
-                  type="password"
-                  value={form?.sttApiKey ?? ""}
-                  onChange={(event) => edit({ sttApiKey: event.target.value })}
-                  placeholder={
-                    settings?.hasSttApiKey
-                      ? "saved - type to replace it"
-                      : "only needed for a separate voice endpoint"
-                  }
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={envLocked("JARVIS_STT_API_KEY")}
-                />
+                <div className="field-with-action">
+                  <input
+                    type="password"
+                    value={form?.sttApiKey ?? ""}
+                    onChange={(event) =>
+                      edit({ sttApiKey: event.target.value, clearSttApiKey: false })
+                    }
+                    placeholder={
+                      settings?.hasSttApiKey && !form?.clearSttApiKey
+                        ? "saved - type to replace it"
+                        : form?.clearSttApiKey
+                          ? "saved key will be removed"
+                          : "only needed for a separate voice endpoint"
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={envLocked("JARVIS_STT_API_KEY")}
+                  />
+                  {settings?.hasSttApiKey && !form?.clearSttApiKey && (
+                    <button
+                      type="button"
+                      className="field-action"
+                      onClick={() => forgetKey("stt")}
+                      title="Remove the saved voice key when you save"
+                    >
+                      Forget
+                    </button>
+                  )}
+                </div>
               </Field>
 
               <div className="settings-section">
@@ -515,19 +640,42 @@ export function Island() {
                 own; leave either field blank to turn the fallback off.
               </p>
 
+              <datalist id="jarvis-models">
+                {models.map((model) => (
+                  <option key={model} value={model} />
+                ))}
+              </datalist>
+
               <div className="settings-foot">
+                <button
+                  type="button"
+                  className="deny"
+                  onClick={() => void runTest()}
+                  disabled={testing || !form}
+                  title="Check the endpoint and key without spending tokens"
+                >
+                  {testing ? "Testing..." : "Test"}
+                </button>
                 <span
                   className="settings-note"
                   data-tone={
-                    settings?.error ? "bad" : settingsNote ? "ok" : undefined
+                    probe
+                      ? probe.ok
+                        ? "ok"
+                        : "bad"
+                      : settings?.error
+                        ? "bad"
+                        : settingsNote
+                          ? "ok"
+                          : undefined
                   }
                 >
-                  {settings?.error ?? settingsNote}
+                  {probe?.text ?? settings?.error ?? settingsNote}
                 </span>
                 <button
                   type="submit"
                   className="allow"
-                  disabled={saving || !form}
+                  disabled={saving || !form || !dirty}
                 >
                   {saving ? "Saving..." : "Save"}
                 </button>

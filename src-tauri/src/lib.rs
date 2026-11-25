@@ -256,6 +256,20 @@ struct SettingsDraft {
     api_key: String,
     #[serde(default)]
     stt_api_key: String,
+    /// Explicit removal, since a blank field cannot express it.
+    #[serde(default)]
+    clear_api_key: bool,
+    #[serde(default)]
+    clear_stt_api_key: bool,
+}
+
+/// Result of the panel's "test" button: no tokens are spent, so it is safe to
+/// press repeatedly.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectionReport {
+    latency_ms: u64,
+    models: Vec<String>,
 }
 
 fn default_steps() -> u32 {
@@ -290,6 +304,31 @@ fn settings_view(error: Option<String>) -> Result<SettingsView, String> {
     })
 }
 
+/// Check the *draft* values, not the saved ones, so the panel can say whether a
+/// configuration works before it is committed. A blank key means the stored one,
+/// because the webview never receives a key to send back.
+#[tauri::command]
+async fn test_settings(draft: SettingsDraft) -> Result<ConnectionReport, String> {
+    let stored = config::resolve(&config::load_settings().map_err(|error| format!("{error:#}"))?);
+
+    let base_url = non_empty(&draft.base_url).unwrap_or(stored.base_url);
+    let key = non_empty(&draft.api_key).unwrap_or(stored.api_key);
+    let model = non_empty(&draft.model).unwrap_or(stored.model);
+
+    let workspace = config::jarvis_dir()
+        .map_err(|error| format!("{error:#}"))?
+        .join("workspace");
+    let llm = LlmClient::new(&Config::new(base_url, key, model, workspace));
+
+    let started = std::time::Instant::now();
+    let models = llm.list_models().await.map_err(|error| format!("{error:#}"))?;
+
+    Ok(ConnectionReport {
+        latency_ms: started.elapsed().as_millis() as u64,
+        models,
+    })
+}
+
 #[tauri::command]
 fn get_settings(state: State<'_, AppState>) -> Result<SettingsView, String> {
     settings_view(state.runtime().startup_error.clone())
@@ -314,6 +353,13 @@ fn save_settings(state: State<'_, AppState>, draft: SettingsDraft) -> Result<Set
     }
     if let Some(key) = non_empty(&draft.stt_api_key) {
         settings.stt_api_key = Some(key);
+    }
+    // Applied after the assignments above, so an explicit "forget" wins.
+    if draft.clear_api_key {
+        settings.api_key = None;
+    }
+    if draft.clear_stt_api_key {
+        settings.stt_api_key = None;
     }
 
     config::save_settings(&settings).map_err(|error| format!("{error:#}"))?;
@@ -423,7 +469,8 @@ pub fn run() {
             start_dictation,
             stop_dictation,
             get_settings,
-            save_settings
+            save_settings,
+            test_settings
         ])
         .run(tauri::generate_context!())
         .expect("Jarvis failed to start");

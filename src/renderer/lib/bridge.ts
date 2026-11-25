@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   BridgeEvent,
   ConfirmRequest,
+  ConnectionReport,
   Phase,
   SettingsDraft,
   SettingsView,
@@ -127,6 +128,27 @@ export async function getSettings(): Promise<SettingsView> {
  * Saves and applies at once. A rejected configuration comes back in
  * `view.error` rather than as a rejection, so the panel keeps the typed values.
  */
+export async function testSettings(
+  draft: SettingsDraft,
+): Promise<ConnectionReport> {
+  if (isLive) {
+    return invoke<ConnectionReport>("test_settings", { draft });
+  }
+  await sleep(600);
+  if (!draft.baseUrl.trim().startsWith("http")) {
+    throw new Error(`could not reach ${draft.baseUrl || "(no endpoint)"} `);
+  }
+  return {
+    latencyMs: 218,
+    models: [
+      "google/gemini-2.5-flash",
+      "openai/gpt-4o-mini",
+      "minicpm5:latest",
+      "glm-4.6v",
+    ],
+  };
+}
+
 export async function saveSettings(
   draft: SettingsDraft,
 ): Promise<SettingsView> {
@@ -146,8 +168,12 @@ export async function saveSettings(
     sttBaseUrl: draft.sttBaseUrl,
     fallbackBaseUrl: draft.fallbackBaseUrl,
     fallbackModel: draft.fallbackModel,
-    hasApiKey: demoSettings.hasApiKey || Boolean(draft.apiKey.trim()),
-    hasSttApiKey: demoSettings.hasSttApiKey || Boolean(draft.sttApiKey.trim()),
+    hasApiKey: draft.clearApiKey
+      ? false
+      : demoSettings.hasApiKey || Boolean(draft.apiKey.trim()),
+    hasSttApiKey: draft.clearSttApiKey
+      ? false
+      : demoSettings.hasSttApiKey || Boolean(draft.sttApiKey.trim()),
     error,
   };
   return { ...demoSettings };
