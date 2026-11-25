@@ -9,6 +9,7 @@ pub mod config;
 pub mod llm;
 pub mod platform;
 pub mod policy;
+pub mod speech;
 pub mod tools;
 
 pub use agent::{Agent, AgentEvent, Phase};

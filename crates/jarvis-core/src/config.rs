@@ -39,6 +39,12 @@ pub struct Config {
     /// Optional `JARVIS_FALLBACK_API_KEY`: only for a remote fallback, which is
     /// unusual - a loopback endpoint needs no key.
     pub fallback_api_key: Option<String>,
+    /// `JARVIS_SPEAK`: read an answer aloud when the turn started by dictation.
+    pub speak: bool,
+    /// `JARVIS_VOICE`: SAPI voice name; empty means the system default.
+    pub voice: String,
+    /// `JARVIS_SPEECH_RATE`: SAPI rate, clamped to -10..=10.
+    pub speech_rate: i32,
 }
 
 /// A second endpoint tried when the primary one fails.
@@ -78,6 +84,9 @@ impl Config {
             fallback_base_url: resolved.fallback_base_url,
             fallback_model: resolved.fallback_model,
             fallback_api_key: resolved.fallback_api_key,
+            speak: resolved.speak,
+            voice: resolved.voice,
+            speech_rate: resolved.speech_rate,
         };
         config.validate()?;
         Ok(config)
@@ -104,6 +113,9 @@ impl Config {
             fallback_base_url: None,
             fallback_model: None,
             fallback_api_key: None,
+            speak: true,
+            voice: String::new(),
+            speech_rate: 0,
         }
     }
 
@@ -238,6 +250,9 @@ pub struct Settings {
     pub fallback_base_url: Option<String>,
     pub fallback_model: Option<String>,
     pub fallback_api_key: Option<String>,
+    pub speak: Option<bool>,
+    pub voice: Option<String>,
+    pub speech_rate: Option<i32>,
 }
 
 /// `Config`'s inputs after precedence, before validation.
@@ -257,10 +272,13 @@ pub struct Resolved {
     pub fallback_base_url: Option<String>,
     pub fallback_model: Option<String>,
     pub fallback_api_key: Option<String>,
+    pub speak: bool,
+    pub voice: String,
+    pub speech_rate: i32,
 }
 
 /// Variables that override the settings file.
-pub const ENV_NAMES: [&str; 11] = [
+pub const ENV_NAMES: [&str; 14] = [
     "JARVIS_BASE_URL",
     "JARVIS_API_KEY",
     "JARVIS_MODEL",
@@ -272,6 +290,9 @@ pub const ENV_NAMES: [&str; 11] = [
     "JARVIS_FALLBACK_BASE_URL",
     "JARVIS_FALLBACK_MODEL",
     "JARVIS_FALLBACK_API_KEY",
+    "JARVIS_SPEAK",
+    "JARVIS_VOICE",
+    "JARVIS_SPEECH_RATE",
 ];
 
 /// Resolve settings exactly as `Config::load` does, but without validating.
@@ -323,6 +344,24 @@ fn resolve_with(settings: &Settings, env: impl Fn(&str) -> Option<String>) -> Re
         .map(|value| value.trim_end_matches('/').to_string()),
         fallback_model: value("JARVIS_FALLBACK_MODEL", settings.fallback_model.clone()),
         fallback_api_key: value("JARVIS_FALLBACK_API_KEY", settings.fallback_api_key.clone()),
+        // Only "off" spellings disable it, so an unset or odd value keeps the
+        // default: a silent assistant should be a choice, never an accident.
+        speak: value("JARVIS_SPEAK", settings.speak.map(|on| on.to_string()))
+            .map(|flag| {
+                !matches!(
+                    flag.to_ascii_lowercase().as_str(),
+                    "0" | "false" | "no" | "off"
+                )
+            })
+            .unwrap_or(true),
+        voice: value("JARVIS_VOICE", settings.voice.clone()).unwrap_or_default(),
+        speech_rate: value(
+            "JARVIS_SPEECH_RATE",
+            settings.speech_rate.map(|rate| rate.to_string()),
+        )
+        .and_then(|rate| rate.parse::<i32>().ok())
+        .unwrap_or(0)
+        .clamp(-10, 10),
     }
 }
 

@@ -43,6 +43,11 @@ export interface SettingsView {
   sttBaseUrl: string;
   fallbackBaseUrl: string;
   fallbackModel: string;
+  /** Read dictated answers aloud. */
+  speak: boolean;
+  /** SAPI voice name; blank means the system default. */
+  voice: string;
+  speechRate: number;
   hasApiKey: boolean;
   hasSttApiKey: boolean;
   /** Variables set in `.env`; those fields are read-only until removed there. */
@@ -66,6 +71,9 @@ export interface SettingsDraft {
   /** Explicit removal, since a blank field cannot express it. */
   clearApiKey: boolean;
   clearSttApiKey: boolean;
+  speak: boolean;
+  voice: string;
+  speechRate: number;
 }
 
 /** What the panel's test button learns without spending tokens. */
@@ -78,7 +86,7 @@ export interface ConnectionReport {
 export const PHASE_SIZE: Record<Phase, { w: number; h: number }> = {
   idle: { w: 232, h: 48 },
   open: { w: 560, h: 248 },
-  settings: { w: 560, h: 620 },
+  settings: { w: 560, h: 700 },
   working: { w: 560, h: 96 },
   confirm: { w: 560, h: 172 },
   done: { w: 560, h: 72 },
