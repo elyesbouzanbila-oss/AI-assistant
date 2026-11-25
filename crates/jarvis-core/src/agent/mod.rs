@@ -790,7 +790,7 @@ mod tests {
             history.push(ChatMessage::assistant("ok".to_string(), Vec::new()));
         }
         trim(&mut history);
-        assert!(history.len() <= 40);
+        assert_eq!(history.len(), 24, "the window stays at MAX");
         assert_eq!(history.first().unwrap().role, "user");
     }
 
