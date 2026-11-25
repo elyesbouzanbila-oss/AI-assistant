@@ -31,6 +31,28 @@ pub struct Config {
     /// Optional `JARVIS_STT_API_KEY`: the key for `stt_base_url`. Never falls
     /// back across hosts, so the chat key cannot leak to another provider.
     pub stt_api_key: Option<String>,
+    /// Optional `JARVIS_FALLBACK_BASE_URL` / `JARVIS_FALLBACK_MODEL`: a local
+    /// model used when the primary endpoint fails. Both are needed; see
+    /// `Config::fallback`.
+    pub fallback_base_url: Option<String>,
+    pub fallback_model: Option<String>,
+    /// Optional `JARVIS_FALLBACK_API_KEY`: only for a remote fallback, which is
+    /// unusual - a loopback endpoint needs no key.
+    pub fallback_api_key: Option<String>,
+}
+
+/// A second endpoint tried when the primary one fails.
+#[derive(Debug, Clone)]
+pub struct Fallback {
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+}
+
+impl Fallback {
+    pub fn completions_url(&self) -> String {
+        completions_url(&self.base_url)
+    }
 }
 
 impl Config {
@@ -53,6 +75,9 @@ impl Config {
             stt_model: resolved.stt_model,
             stt_base_url: resolved.stt_base_url,
             stt_api_key: resolved.stt_api_key,
+            fallback_base_url: resolved.fallback_base_url,
+            fallback_model: resolved.fallback_model,
+            fallback_api_key: resolved.fallback_api_key,
         };
         config.validate()?;
         Ok(config)
@@ -76,7 +101,20 @@ impl Config {
             stt_model: None,
             stt_base_url: None,
             stt_api_key: None,
+            fallback_base_url: None,
+            fallback_model: None,
+            fallback_api_key: None,
         }
+    }
+
+    /// `None` unless the endpoint *and* the model are set: half a fallback
+    /// would silently run a model nobody chose.
+    pub fn fallback(&self) -> Option<Fallback> {
+        Some(Fallback {
+            base_url: self.fallback_base_url.clone()?,
+            api_key: self.fallback_api_key.clone().unwrap_or_default(),
+            model: self.fallback_model.clone()?,
+        })
     }
 
     /// Model used for voice transcription.
@@ -130,6 +168,18 @@ impl Config {
         if !self.base_url.starts_with("http") {
             anyhow::bail!("JARVIS_BASE_URL must start with http:// or https://");
         }
+        if let Some(fallback) = self.fallback() {
+            if !fallback.base_url.starts_with("http") {
+                anyhow::bail!("the fallback endpoint must start with http:// or https://");
+            }
+            if fallback.api_key.trim().is_empty() && !is_loopback(&fallback.base_url) {
+                anyhow::bail!(
+                    "the fallback endpoint {} is remote but has no key. Set JARVIS_FALLBACK_API_KEY, \
+                     or point it at Ollama on loopback, which needs none",
+                    fallback.base_url
+                );
+            }
+        }
         if self.transcription_key().trim().is_empty() && !is_loopback(self.transcription_base_url())
         {
             anyhow::bail!(
@@ -143,7 +193,7 @@ impl Config {
 
     /// `POST {base}/chat/completions`
     pub fn chat_completions_url(&self) -> String {
-        format!("{}/chat/completions", self.base_url)
+        completions_url(&self.base_url)
     }
 
     /// Redacted summary, safe to log.
@@ -185,6 +235,9 @@ pub struct Settings {
     pub stt_model: Option<String>,
     pub stt_base_url: Option<String>,
     pub stt_api_key: Option<String>,
+    pub fallback_base_url: Option<String>,
+    pub fallback_model: Option<String>,
+    pub fallback_api_key: Option<String>,
 }
 
 /// `Config`'s inputs after precedence, before validation.
@@ -201,10 +254,13 @@ pub struct Resolved {
     pub stt_model: Option<String>,
     pub stt_base_url: Option<String>,
     pub stt_api_key: Option<String>,
+    pub fallback_base_url: Option<String>,
+    pub fallback_model: Option<String>,
+    pub fallback_api_key: Option<String>,
 }
 
 /// Variables that override the settings file.
-pub const ENV_NAMES: [&str; 8] = [
+pub const ENV_NAMES: [&str; 11] = [
     "JARVIS_BASE_URL",
     "JARVIS_API_KEY",
     "JARVIS_MODEL",
@@ -213,6 +269,9 @@ pub const ENV_NAMES: [&str; 8] = [
     "JARVIS_STT_MODEL",
     "JARVIS_STT_BASE_URL",
     "JARVIS_STT_API_KEY",
+    "JARVIS_FALLBACK_BASE_URL",
+    "JARVIS_FALLBACK_MODEL",
+    "JARVIS_FALLBACK_API_KEY",
 ];
 
 /// Resolve settings exactly as `Config::load` does, but without validating.
@@ -257,7 +316,18 @@ fn resolve_with(settings: &Settings, env: impl Fn(&str) -> Option<String>) -> Re
         stt_base_url: value("JARVIS_STT_BASE_URL", settings.stt_base_url.clone())
             .map(|value| value.trim_end_matches('/').to_string()),
         stt_api_key: value("JARVIS_STT_API_KEY", settings.stt_api_key.clone()),
+        fallback_base_url: value(
+            "JARVIS_FALLBACK_BASE_URL",
+            settings.fallback_base_url.clone(),
+        )
+        .map(|value| value.trim_end_matches('/').to_string()),
+        fallback_model: value("JARVIS_FALLBACK_MODEL", settings.fallback_model.clone()),
+        fallback_api_key: value("JARVIS_FALLBACK_API_KEY", settings.fallback_api_key.clone()),
     }
+}
+
+fn completions_url(base_url: &str) -> String {
+    format!("{}/chat/completions", base_url.trim_end_matches('/'))
 }
 
 /// Variables set in the environment (including `.env`): the panel shows those

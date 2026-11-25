@@ -99,6 +99,8 @@ export function Island() {
         maxSteps: view.maxSteps,
         sttModel: view.sttModel,
         sttBaseUrl: view.sttBaseUrl,
+        fallbackBaseUrl: view.fallbackBaseUrl,
+        fallbackModel: view.fallbackModel,
         apiKey: "",
         sttApiKey: "",
       });
@@ -472,6 +474,46 @@ export function Island() {
                   disabled={envLocked("JARVIS_STT_API_KEY")}
                 />
               </Field>
+
+              <div className="settings-section">
+                Fallback <span>local, started on demand</span>
+              </div>
+
+              <div className="field-row voice">
+                <Field
+                  label="Fallback endpoint"
+                  locked={envLocked("JARVIS_FALLBACK_BASE_URL")}
+                >
+                  <input
+                    value={form?.fallbackBaseUrl ?? ""}
+                    onChange={(event) =>
+                      edit({ fallbackBaseUrl: event.target.value })
+                    }
+                    placeholder="http://localhost:11434/v1"
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={envLocked("JARVIS_FALLBACK_BASE_URL")}
+                  />
+                </Field>
+                <Field
+                  label="Fallback model"
+                  locked={envLocked("JARVIS_FALLBACK_MODEL")}
+                >
+                  <input
+                    value={form?.fallbackModel ?? ""}
+                    onChange={(event) => edit({ fallbackModel: event.target.value })}
+                    placeholder="minicpm5:latest"
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={envLocked("JARVIS_FALLBACK_MODEL")}
+                  />
+                </Field>
+              </div>
+
+              <p className="field-note">
+                Tried when the model above fails. WSL and Ollama start on their
+                own; leave either field blank to turn the fallback off.
+              </p>
 
               <div className="settings-foot">
                 <span

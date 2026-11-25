@@ -262,6 +262,13 @@ pub struct LlmClient {
     /// Voice may live on a different endpoint and key than chat: a local model
     /// for conversation with cloud transcription, for instance.
     voice: Target,
+    /// Local model tried when `chat` fails, so a rate limit or an outage is a
+    /// slower answer instead of a dead assistant.
+    fallback: Option<Target>,
+    /// Runs before the second fallback attempt: starts WSL and Ollama on a
+    /// machine where nothing is listening yet. Injected by the shell, because
+    /// booting an OS service is not the client's business.
+    wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// One endpoint, key and model. Chat and voice each have their own.
@@ -301,11 +308,29 @@ impl LlmClient {
                 api_key: config.transcription_key().to_string(),
                 model: config.transcription_model().to_string(),
             },
+            fallback: None,
+            wake: None,
         }
     }
 
     pub fn model(&self) -> &str {
         &self.chat.model
+    }
+
+    /// Retry a failed turn on a second endpoint instead of failing the turn.
+    pub fn with_fallback(mut self, fallback: &crate::config::Fallback) -> Self {
+        self.fallback = Some(Target {
+            url: fallback.completions_url(),
+            api_key: fallback.api_key.clone(),
+            model: fallback.model.clone(),
+        });
+        self
+    }
+
+    /// Run before the second fallback attempt, e.g. to boot WSL and Ollama.
+    pub fn with_wake(mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.wake = Some(wake);
+        self
     }
 
     /// One streamed completion. `on_delta` receives text as it arrives so the
@@ -316,8 +341,61 @@ impl LlmClient {
         tools: &[Value],
         on_delta: &mut (dyn FnMut(&str) + Send),
     ) -> Result<Completion> {
-        self.request(&self.chat, 0.3, messages, tools, on_delta)
-            .await
+        // Text that already reached the island cannot be unsaid, so a retry is
+        // only safe before the first delta arrives.
+        let streamed = std::sync::atomic::AtomicBool::new(false);
+        let primary = {
+            let streamed = &streamed;
+            let mut sink = |text: &str| {
+                streamed.store(true, std::sync::atomic::Ordering::SeqCst);
+                on_delta(text);
+            };
+            self.request(&self.chat, 0.3, messages, tools, &mut sink)
+                .await
+        };
+
+        let primary_error = match primary {
+            Ok(completion) => return Ok(completion),
+            Err(error) => error,
+        };
+
+        let Some(fallback) = &self.fallback else {
+            return Err(primary_error);
+        };
+        if streamed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(primary_error.context(format!(
+                "{} stopped part-way through the answer, so the local fallback was not used",
+                self.chat.model
+            )));
+        }
+
+        // First try as-is: on a machine where Ollama is already serving this
+        // costs nothing, and no wake-up delay is paid.
+        let mut failure = match self.request(fallback, 0.3, messages, tools, on_delta).await {
+            Ok(completion) => return Ok(completion),
+            Err(error) => error,
+        };
+
+        if let Some(wake) = self.wake.clone() {
+            // Blocking work (wsl.exe, waiting for the port) off the async runtime.
+            let wake_error = tokio::task::spawn_blocking(move || (wake)()).await.err();
+            match self.request(fallback, 0.3, messages, tools, on_delta).await {
+                Ok(completion) => return Ok(completion),
+                Err(error) => {
+                    failure = match wake_error {
+                        Some(wake_error) => error.context(format!(
+                            "the local model could not be started: {wake_error}"
+                        )),
+                        None => error,
+                    }
+                }
+            }
+        }
+
+        Err(failure.context(format!(
+            "the primary model {} failed first: {primary_error:#}",
+            self.chat.model
+        )))
     }
 
     /// Transcribe a WAV recording with the model's audio input, so voice needs
@@ -610,6 +688,118 @@ mod tests {
             "data: {\"choices\":[{\"delta\":{\"content\":\"héllo \u{1F680}\"}}]}"
         );
         assert!(buffer.is_empty());
+    }
+
+    /// A one-shot HTTP server, so the fallback path is tested against real
+    /// sockets instead of a stub of the client itself.
+    fn one_shot(
+        status: u16,
+        content_type: &'static str,
+        body: &'static str,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut scratch = [0u8; 4096];
+                let _ = stream.read(&mut scratch);
+                let head = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: {content_type}\r\n\
+                     content-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+            }
+        });
+        (format!("http://127.0.0.1:{port}/v1"), handle)
+    }
+
+    /// A port nothing listens on, obtained by binding and immediately releasing.
+    fn dead_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        port
+    }
+
+    #[tokio::test]
+    async fn a_failing_primary_retries_on_the_fallback_model() {
+        let (primary, primary_handle) = one_shot(
+            500,
+            "application/json",
+            r#"{"error":{"message":"provider is down"}}"#,
+        );
+        let (local, local_handle) = one_shot(
+            200,
+            "text/event-stream",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"local answer\"}}]}\n\ndata: [DONE]\n\n",
+        );
+
+        let config = Config::new(primary, "sk-cloud", "cloud-model", "/tmp/ws");
+        let fallback = crate::config::Fallback {
+            base_url: local,
+            api_key: String::new(),
+            model: "minicpm5:latest".into(),
+        };
+
+        let mut heard = String::new();
+        let completion = LlmClient::new(&config)
+            .with_fallback(&fallback)
+            .complete(&[ChatMessage::user("hello")], &[], &mut |text| {
+                heard.push_str(text);
+            })
+            .await
+            .expect("the fallback answered");
+
+        assert_eq!(completion.content, "local answer");
+        assert_eq!(heard, "local answer", "the island still sees it stream");
+        primary_handle.join().unwrap();
+        local_handle.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_dead_fallback_starts_the_local_model_once_then_reports_both() {
+        let (primary, handle) = one_shot(
+            503,
+            "application/json",
+            r#"{"error":{"message":"no capacity"}}"#,
+        );
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let config = Config::new(primary, "sk-cloud", "cloud-model", "/tmp/ws");
+        let fallback = crate::config::Fallback {
+            base_url: format!("http://127.0.0.1:{}/v1", dead_port()),
+            api_key: String::new(),
+            model: "minicpm5:latest".into(),
+        };
+        let wake: std::sync::Arc<dyn Fn() + Send + Sync> = {
+            let calls = calls.clone();
+            std::sync::Arc::new(move || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+
+        let error = LlmClient::new(&config)
+            .with_fallback(&fallback)
+            .with_wake(wake)
+            .complete(&[ChatMessage::user("hello")], &[], &mut |_| {})
+            .await
+            .expect_err("both endpoints are down");
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the local model is started exactly once, not per attempt"
+        );
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("cloud-model"),
+            "the primary failure is named too: {message}"
+        );
+        handle.join().unwrap();
     }
 
     #[test]

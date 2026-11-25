@@ -77,6 +77,24 @@ Dictation is the exception: Ollama's API takes no audio input. Point `JARVIS_STT
 `JARVIS_STT_API_KEY` at a cloud audio model and voice keeps working while chat stays local — the
 transcript is typed into the input box and then answered by the local model.
 
+### Fallback to a local model
+
+Point the primary endpoint at OpenRouter (or anything else) and set a fallback, and a
+rate limit or an outage becomes a slower answer instead of a dead assistant:
+
+```
+JARVIS_FALLBACK_BASE_URL=http://localhost:11434/v1
+JARVIS_FALLBACK_MODEL=minicpm5:latest
+```
+
+Both are in the settings panel too, under **Fallback**. On Windows the app starts WSL,
+starts `ollama serve` if nothing is listening on that port, and loads the model — you do
+not need a terminal open. The fallback is tried once per turn, before any text has
+streamed; if the local model is down too, the error names both failures.
+
+A local model is usually weaker: it may not support image input (so `screenshot` fails)
+and it will not have anything like the cloud model's judgement. Keep it as a safety net.
+
 ## Using it
 
 - The island sits at the top centre of the screen. Hover it (or press **Ctrl+Space**) to open.

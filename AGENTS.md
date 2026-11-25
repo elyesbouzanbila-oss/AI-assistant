@@ -25,6 +25,7 @@ Everything that touches the OS sits behind the `Platform` trait
 | Tool schemas, execution, chip summaries | `crates/jarvis-core/src/tools/mod.rs` |
 | Approval rules, blocked apps | `crates/jarvis-core/src/policy.rs` |
 | OS behaviour (Windows) | `platform/{win,recorder,input,combo}.rs` |
+| Starting the local fallback (WSL + Ollama) | `src-tauri/src/ollama.rs` |
 | Window, commands, events, hotkeys | `src-tauri/src/lib.rs` |
 | Island UI | `src/renderer/Island.tsx` |
 
@@ -51,6 +52,9 @@ without mutating the real environment; keep that seam.
 | `JARVIS_STT_MODEL` | `JARVIS_MODEL` | voice; must accept audio input |
 | `JARVIS_STT_BASE_URL` | `JARVIS_BASE_URL` | separate voice endpoint |
 | `JARVIS_STT_API_KEY` | — | required when `JARVIS_STT_BASE_URL` differs |
+| `JARVIS_FALLBACK_BASE_URL` | unset | second endpoint, tried when the primary fails |
+| `JARVIS_FALLBACK_MODEL` | unset | required with the URL above; either missing disables the fallback |
+| `JARVIS_FALLBACK_API_KEY` | — | only for a remote fallback; loopback needs none |
 
 All eight can also be set in the settings panel; the file it writes is
 `~/Jarvis/settings.json` (pretty-printed JSON, gitignored by location, not encrypted).
@@ -64,6 +68,15 @@ Resolution rules that are easy to break:
 - **The chat key never crosses hosts.** A distinct `JARVIS_STT_BASE_URL` demands its own
   `JARVIS_STT_API_KEY`; `Config::transcription_key` returns empty rather than reuse the
   chat key, and validation explains why.
+- **The fallback is one retry, not a loop.** `LlmClient::complete` tries `chat`, then the
+  fallback once, then — if a `wake` hook is installed — wakes the local model and tries
+  again once. It never retries after a delta has reached the island, because streamed
+  text cannot be unsaid; that case reports the primary error instead. Do not turn this
+  into a retry loop: a dead endpoint plus a dead fallback must fail in seconds.
+- **Only loopback fallbacks are started.** `ollama::ensure` parses the endpoint, refuses
+  anything that is not `localhost` / `127.0.0.1` / `::1`, and validates the model name
+  before interpolating it into the `wsl.exe` command — the same rule as `JARVIS_ARG`:
+  nothing model-supplied reaches a shell.
 - **Chat and voice are separate `Target`s** in `LlmClient`, both routed through one
   `request()`. Voice sends the WAV as an `input_audio` chat part, not to
   `/audio/transcriptions` — so a Whisper-only service will not work by setting a URL.
