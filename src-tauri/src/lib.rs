@@ -5,7 +5,9 @@
 
 mod island;
 mod ollama;
+mod speech;
 
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
 use jarvis_core::agent::{Agent, AgentEvent, Emitter, Phase};
@@ -20,6 +22,50 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 const NOT_CONFIGURED: &str =
     "Jarvis has no model yet. Open Settings (the gear icon) and add an endpoint, model and key.";
 
+/// Speech settings plus the per-turn flag. Shared by the event forwarder, which
+/// speaks, and the commands, which know how the turn started; `save_settings`
+/// refreshes it with the rest of the runtime.
+#[derive(Clone, Default)]
+struct VoiceState {
+    turn: Arc<AtomicBool>,
+    enabled: Arc<AtomicBool>,
+    voice: Arc<std::sync::Mutex<String>>,
+    rate: Arc<AtomicI32>,
+}
+
+impl VoiceState {
+    fn update(&self, config: &Config) {
+        self.enabled.store(config.speak, Ordering::SeqCst);
+        if let Ok(mut name) = self.voice.lock() {
+            *name = config.voice.clone();
+        }
+        self.rate.store(config.speech_rate, Ordering::SeqCst);
+    }
+
+    /// Speak a finished turn, if it started by dictation. The flag is consumed
+    /// either way, so one answer is spoken at most once.
+    fn answer(&self, text: &str) {
+        let by_voice = self.turn.swap(false, Ordering::SeqCst);
+        if !by_voice || !self.enabled.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(spoken) = jarvis_core::speech::to_speech(text) else {
+            return;
+        };
+        let name = self
+            .voice
+            .lock()
+            .map(|voice| voice.clone())
+            .unwrap_or_default();
+
+        // Silence is an acceptable outcome; a turn that dies because the sound
+        // card was busy is not.
+        if let Err(error) = speech::speak(&spoken, &name, self.rate.load(Ordering::SeqCst)) {
+            tracing::warn!("could not speak the answer: {error}");
+        }
+    }
+}
+
 struct AppState {
     /// Rebuilt by `save_settings`, so a new endpoint or key applies at once.
     runtime: std::sync::Mutex<Runtime>,
@@ -27,6 +73,8 @@ struct AppState {
     recorder: tokio::sync::Mutex<Option<Recorder>>,
     /// Kept so a rebuilt agent still reports to the same island.
     emit: Emitter,
+    /// Whether the current turn was dictated, and how to speak it.
+    voice: VoiceState,
 }
 
 struct Runtime {
@@ -38,10 +86,11 @@ struct Runtime {
 }
 
 impl Runtime {
-    fn build(emit: &Emitter) -> Self {
+    fn build(emit: &Emitter, voice: &VoiceState) -> Self {
         match Config::load() {
             Ok(config) => {
                 tracing::info!("starting with {}", config.describe());
+                voice.update(&config);
                 let audit = config::audit_log_path()
                     .map(Audit::new)
                     .unwrap_or_else(|_| Audit::disabled());
@@ -128,7 +177,11 @@ fn phase_name(phase: Phase) -> &'static str {
 // ------------------------------------------------------------------ commands
 
 #[tauri::command]
-async fn ask(state: State<'_, AppState>, prompt: String) -> Result<(), String> {
+async fn ask(
+    state: State<'_, AppState>,
+    prompt: String,
+    voice: Option<bool>,
+) -> Result<(), String> {
     let (agent, failure) = {
         let runtime = state.runtime();
         (runtime.agent.clone(), runtime.startup_error.clone())
@@ -140,10 +193,15 @@ async fn ask(state: State<'_, AppState>, prompt: String) -> Result<(), String> {
         return Err(NOT_CONFIGURED.to_string());
     };
 
-    agent
+    // Read by the event forwarder when the answer arrives. Cleared afterwards
+    // so a failed turn cannot make the next one speak.
+    state.voice.turn.store(voice.unwrap_or(false), Ordering::SeqCst);
+    let result = agent
         .ask(&prompt)
         .await
-        .map_err(|error| format!("{error:#}"))
+        .map_err(|error| format!("{error:#}"));
+    state.voice.turn.store(false, Ordering::SeqCst);
+    result
 }
 
 #[tauri::command]
@@ -155,6 +213,8 @@ fn confirm(state: State<'_, AppState>, id: String, allow: bool) {
 
 #[tauri::command]
 fn cancel(state: State<'_, AppState>) {
+    // Esc means stop, including the voice in the middle of a sentence.
+    speech::stop();
     if let Some(agent) = state.runtime().agent.clone() {
         agent.cancel();
     }
@@ -162,6 +222,9 @@ fn cancel(state: State<'_, AppState>) {
 
 #[tauri::command]
 async fn start_dictation(state: State<'_, AppState>) -> Result<(), String> {
+    // Half duplex: the microphone must not record Jarvis's own voice.
+    speech::stop();
+
     let failure = state.runtime().startup_error.clone();
     if let Some(message) = failure {
         return Err(message);
@@ -225,6 +288,9 @@ struct SettingsView {
     stt_base_url: String,
     fallback_base_url: String,
     fallback_model: String,
+    speak: bool,
+    voice: String,
+    speech_rate: i32,
     has_api_key: bool,
     has_stt_api_key: bool,
     /// Variables set in the environment or `.env`; those fields are read-only.
@@ -261,6 +327,16 @@ struct SettingsDraft {
     clear_api_key: bool,
     #[serde(default)]
     clear_stt_api_key: bool,
+    #[serde(default = "default_speak")]
+    speak: bool,
+    #[serde(default)]
+    voice: String,
+    #[serde(default)]
+    speech_rate: i32,
+}
+
+fn default_speak() -> bool {
+    true
 }
 
 /// Result of the panel's "test" button: no tokens are spent, so it is safe to
@@ -294,6 +370,9 @@ fn settings_view(error: Option<String>) -> Result<SettingsView, String> {
         stt_base_url: resolved.stt_base_url.unwrap_or_default(),
         fallback_base_url: resolved.fallback_base_url.unwrap_or_default(),
         fallback_model: resolved.fallback_model.unwrap_or_default(),
+        speak: resolved.speak,
+        voice: resolved.voice,
+        speech_rate: resolved.speech_rate,
         has_api_key: !resolved.api_key.trim().is_empty(),
         has_stt_api_key: resolved
             .stt_api_key
@@ -348,6 +427,9 @@ fn save_settings(state: State<'_, AppState>, draft: SettingsDraft) -> Result<Set
     settings.stt_base_url = non_empty(&draft.stt_base_url);
     settings.fallback_base_url = non_empty(&draft.fallback_base_url);
     settings.fallback_model = non_empty(&draft.fallback_model);
+    settings.speak = Some(draft.speak);
+    settings.voice = non_empty(&draft.voice);
+    settings.speech_rate = Some(draft.speech_rate.clamp(-10, 10));
     if let Some(key) = non_empty(&draft.api_key) {
         settings.api_key = Some(key);
     }
@@ -365,7 +447,7 @@ fn save_settings(state: State<'_, AppState>, draft: SettingsDraft) -> Result<Set
     config::save_settings(&settings).map_err(|error| format!("{error:#}"))?;
 
     let mut runtime = state.runtime();
-    *runtime = Runtime::build(&state.emit);
+    *runtime = Runtime::build(&state.emit, &state.voice);
     let error = runtime.startup_error.clone();
     drop(runtime);
 
@@ -424,18 +506,32 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
 
+            let voice = VoiceState::default();
             let emit: Emitter = {
                 let handle = handle.clone();
-                Arc::new(move |event: AgentEvent| forward(&handle, event))
+                let voice = voice.clone();
+                Arc::new(move |event: AgentEvent| {
+                    // Captured before the event is consumed; spoken after the
+                    // island has been told, so the screen is never behind the voice.
+                    let answer = match &event {
+                        AgentEvent::Final(text) => Some(text.clone()),
+                        _ => None,
+                    };
+                    forward(&handle, event);
+                    if let Some(text) = answer {
+                        voice.answer(&text);
+                    }
+                })
             };
 
-            let runtime = Runtime::build(&emit);
+            let runtime = Runtime::build(&emit, &voice);
             let failure = runtime.startup_error.clone();
 
             app.manage(AppState {
                 runtime: std::sync::Mutex::new(runtime),
                 recorder: tokio::sync::Mutex::new(None),
                 emit,
+                voice,
             });
 
             if let Some(window) = island_window(&handle) {
@@ -472,6 +568,12 @@ pub fn run() {
             save_settings,
             test_settings
         ])
-        .run(tauri::generate_context!())
-        .expect("Jarvis failed to start");
+        .build(tauri::generate_context!())
+        .expect("Jarvis failed to start")
+        .run(|_, event| {
+            // A child process would otherwise finish the sentence after a quit.
+            if let tauri::RunEvent::Exit = event {
+                speech::stop();
+            }
+        });
 }

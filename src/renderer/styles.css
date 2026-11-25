@@ -99,7 +99,7 @@ body.live .island {
 }
 .island[data-phase="settings"] {
   --w: 560px;
-  --h: 620px;
+  --h: 700px;
 }
 .island[data-phase="working"] {
   --w: 560px;
@@ -741,6 +741,29 @@ body.live .island {
   background: rgba(250, 189, 47, 0.12);
   border-color: rgba(250, 189, 47, 0.4);
   color: var(--text);
+}
+
+.field-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #d5c4a1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.field-check input {
+  accent-color: var(--accent, #fabd2f);
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.field-check em {
+  font-style: normal;
+  color: var(--muted);
 }
 
 .field-with-action {

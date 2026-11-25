@@ -127,6 +127,22 @@ Capture is Windows MCI (`waveaudio`) through the same hidden PowerShell used for
 so there is no audio dependency. The WAV is written to the temp folder, sent once, and deleted
 whether transcription succeeds or not.
 
+### Hearing the answer
+
+Dictate a request and the answer is spoken back; type one and Jarvis stays silent. That is the
+whole rule: a prompt that is still exactly the transcript counts as spoken, so fixing a
+misheard word before sending makes it a typed turn.
+
+The voice is Windows SAPI through a hidden PowerShell - offline, free, no key and no extra
+dependency. Under 200 characters are read verbatim; longer answers are trimmed to their first
+two sentences and end with "The rest is on screen." Code blocks, URLs and markdown are never
+read aloud.
+
+`JARVIS_VOICE` selects an installed voice (the app does not install one), `JARVIS_SPEECH_RATE`
+goes from -10 to 10, and `JARVIS_SPEAK=false` turns it off. Dictating stops a sentence in
+progress, because the microphone would otherwise hear the assistant. Both are in the settings
+panel under Voice.
+
 ## What it can do
 
 | Tool | Notes |

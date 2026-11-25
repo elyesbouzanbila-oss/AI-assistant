@@ -26,6 +26,7 @@ Everything that touches the OS sits behind the `Platform` trait
 | Approval rules, blocked apps | `crates/jarvis-core/src/policy.rs` |
 | OS behaviour (Windows) | `platform/{win,recorder,input,combo}.rs` |
 | Starting the local fallback (WSL + Ollama) | `src-tauri/src/ollama.rs` |
+| Speaking the answer (SAPI) | `src-tauri/src/speech.rs` |
 | Window, commands, events, hotkeys | `src-tauri/src/lib.rs` |
 | Island UI | `src/renderer/Island.tsx` |
 
@@ -55,8 +56,11 @@ without mutating the real environment; keep that seam.
 | `JARVIS_FALLBACK_BASE_URL` | unset | second endpoint, tried when the primary fails |
 | `JARVIS_FALLBACK_MODEL` | unset | required with the URL above; either missing disables the fallback |
 | `JARVIS_FALLBACK_API_KEY` | — | only for a remote fallback; loopback needs none |
+| `JARVIS_SPEAK` | `true` | reads the answer aloud for turns that started by dictation |
+| `JARVIS_VOICE` | unset | SAPI voice name; blank means the system default |
+| `JARVIS_SPEECH_RATE` | `0` | clamped to -10..=10 |
 
-All eight can also be set in the settings panel; the file it writes is
+Every value except `JARVIS_SITE_URL` can also be set in the settings panel; the file it writes is
 `~/Jarvis/settings.json` (pretty-printed JSON, gitignored by location, not encrypted).
 `JARVIS_SITE_URL` is the one value the panel does not expose.
 
@@ -77,6 +81,12 @@ Resolution rules that are easy to break:
   anything that is not `localhost` / `127.0.0.1` / `::1`, and validates the model name
   before interpolating it into the `wsl.exe` command — the same rule as `JARVIS_ARG`:
   nothing model-supplied reaches a shell.
+- **Speech text never becomes script.** `speech::to_speech` decides *what* is read: code
+  fences, inline code, URLs and markdown are dropped, short answers are read verbatim and
+  long ones keep two sentences plus "The rest is on screen." The text and voice name travel
+  in environment variables and the script arrives on `-Command -` stdin, so an answer cannot
+  become PowerShell. Only unedited dictated prompts are spoken, editing the transcript makes
+  it a typed turn, and a speech failure is silence, never `Phase::Error`.
 - **Chat and voice are separate `Target`s** in `LlmClient`, both routed through one
   `request()`. Voice sends the WAV as an `input_audio` chat part, not to
   `/audio/transcriptions` — so a Whisper-only service will not work by setting a URL.

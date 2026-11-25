@@ -81,9 +81,13 @@ export function subscribe(handler: (event: BridgeEvent) => void): () => void {
   };
 }
 
-export async function ask(prompt: string): Promise<void> {
+/**
+ * `voice` marks a turn whose prompt is still exactly the dictation transcript;
+ * Rust speaks that answer and stays silent for every typed turn.
+ */
+export async function ask(prompt: string, voice = false): Promise<void> {
   if (isLive) {
-    await invoke("ask", { prompt });
+    await invoke("ask", { prompt, voice });
     return;
   }
   void runDemo(prompt);
@@ -168,6 +172,9 @@ export async function saveSettings(
     sttBaseUrl: draft.sttBaseUrl,
     fallbackBaseUrl: draft.fallbackBaseUrl,
     fallbackModel: draft.fallbackModel,
+    speak: draft.speak,
+    voice: draft.voice,
+    speechRate: draft.speechRate,
     hasApiKey: draft.clearApiKey
       ? false
       : demoSettings.hasApiKey || Boolean(draft.apiKey.trim()),
@@ -215,6 +222,9 @@ let demoSettings: SettingsView = {
   sttBaseUrl: "",
   fallbackBaseUrl: "http://localhost:11434/v1",
   fallbackModel: "minicpm5:latest",
+  speak: true,
+  voice: "",
+  speechRate: 0,
   hasApiKey: true,
   hasSttApiKey: false,
   envLocked: [],

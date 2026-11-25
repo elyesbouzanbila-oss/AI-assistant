@@ -87,6 +87,8 @@ export function Island() {
   // A ref as well as state: the shortcut and timer callbacks read it out of
   // date with React renders.
   const dictatingRef = useRef(false);
+  /** The transcript dictation produced, while the composer still matches it. */
+  const dictatedRef = useRef<string | null>(null);
 
   const clearCollapse = () => {
     if (collapseTimer.current !== null) {
@@ -127,6 +129,9 @@ export function Island() {
         sttBaseUrl: view.sttBaseUrl,
         fallbackBaseUrl: view.fallbackBaseUrl,
         fallbackModel: view.fallbackModel,
+        speak: view.speak,
+        voice: view.voice,
+        speechRate: view.speechRate,
         apiKey: "",
         sttApiKey: "",
         clearApiKey: false,
@@ -160,7 +165,12 @@ export function Island() {
     try {
       const text = (await stopDictation()).trim();
       if (!keep || !text) return;
-      setDraft((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+      setDraft((prev) => {
+        // A prompt that is still exactly this transcript counts as spoken.
+        // Appending it to a half-typed draft does not, so that turn stays silent.
+        dictatedRef.current = prev.trim() ? null : text;
+        return prev.trim() ? `${prev.trim()} ${text}` : text;
+      });
       window.requestAnimationFrame(() => inputRef.current?.focus());
     } catch (error) {
       setVoiceNote(String(error));
@@ -299,6 +309,8 @@ export function Island() {
   const submit = () => {
     const text = draft.trim();
     if (!text) return;
+    const byVoice = dictatedRef.current !== null && dictatedRef.current === text;
+    dictatedRef.current = null;
     setLines((prev) => [
       ...prev,
       { id: `u-${Date.now()}`, role: "user", text },
@@ -306,7 +318,7 @@ export function Island() {
     setDraft("");
     setNotice("");
     streamingId.current = null;
-    void ask(text);
+    void ask(text, byVoice);
   };
 
   const edit = (patch: Partial<SettingsDraft>) => {
@@ -379,7 +391,10 @@ export function Island() {
       form.sttModel !== settings.sttModel ||
       form.sttBaseUrl !== settings.sttBaseUrl ||
       form.fallbackBaseUrl !== settings.fallbackBaseUrl ||
-      form.fallbackModel !== settings.fallbackModel);
+      form.fallbackModel !== settings.fallbackModel ||
+      form.speak !== settings.speak ||
+      form.voice !== settings.voice ||
+      form.speechRate !== settings.speechRate);
 
   const decide = (allow: boolean) => {
     if (!pending) return;
@@ -600,6 +615,51 @@ export function Island() {
                 </div>
               </Field>
 
+              <div className="field-row voice">
+                <Field label="Voice name" locked={envLocked("JARVIS_VOICE")}>
+                  <input
+                    value={form?.voice ?? ""}
+                    onChange={(event) => edit({ voice: event.target.value })}
+                    placeholder="system default"
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={envLocked("JARVIS_VOICE")}
+                  />
+                </Field>
+                <Field
+                  label="Speech rate"
+                  locked={envLocked("JARVIS_SPEECH_RATE")}
+                >
+                  <input
+                    type="number"
+                    min={-10}
+                    max={10}
+                    value={form?.speechRate ?? 0}
+                    onChange={(event) =>
+                      edit({
+                        speechRate: Math.min(
+                          10,
+                          Math.max(-10, Number(event.target.value) || 0),
+                        ),
+                      })
+                    }
+                    disabled={envLocked("JARVIS_SPEECH_RATE")}
+                  />
+                </Field>
+              </div>
+
+              <label className="field-check">
+                <input
+                  type="checkbox"
+                  checked={form?.speak ?? true}
+                  onChange={(event) => edit({ speak: event.target.checked })}
+                  disabled={envLocked("JARVIS_SPEAK")}
+                />
+                <span>
+                  Speak the answer <em>only when you dictated the request</em>
+                </span>
+              </label>
+
               <div className="settings-section">
                 Fallback <span>local, started on demand</span>
               </div>
@@ -729,7 +789,11 @@ export function Island() {
                 <input
                   ref={inputRef}
                   value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
+                  onChange={(event) => {
+                    // Editing the transcript makes it a typed turn.
+                    dictatedRef.current = null;
+                    setDraft(event.target.value);
+                  }}
                   placeholder={
                     dictating
                       ? "Listening… click the mic to stop"
