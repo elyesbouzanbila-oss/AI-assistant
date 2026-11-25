@@ -9,7 +9,6 @@
 //! Input injection uses enigo (`SendInput` under the hood).
 
 use anyhow::{bail, Context, Result};
-use futures_util::future::BoxFuture;
 use std::process::Stdio;
 
 use super::{input, screenshot, Platform, PlatformFuture};
@@ -180,9 +179,4 @@ impl Platform for WindowsPlatform {
             screenshot::to_data_url(&bytes)
         })
     }
-}
-
-#[allow(dead_code)]
-fn assert_future_type<'a>(future: BoxFuture<'a, Result<String>>) {
-    drop(future);
 }
