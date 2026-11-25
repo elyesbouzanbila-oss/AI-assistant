@@ -317,6 +317,10 @@ impl Agent {
             });
         }
 
+        // The phase is what sizes the island window, so it has to come first:
+        // a confirm emitted alone leaves Allow/Deny outside a working- or
+        // idle-sized window, and the user has to expand the island to answer.
+        self.phase(Phase::Confirm, Some(summary.to_string()));
         self.emit(AgentEvent::Confirm(ConfirmRequest {
             id: id.clone(),
             tool: tool.to_string(),
@@ -339,9 +343,12 @@ impl Agent {
             }
         }
 
-        if allowed {
-            self.phase(Phase::Working, Some("Approved".to_string()));
-        }
+        // Back to the working card either way: the confirm phase owns a taller
+        // window, and a denial would otherwise strand the island at that size.
+        self.phase(
+            Phase::Working,
+            Some(if allowed { "Approved" } else { "Cancelled" }.to_string()),
+        );
         allowed
     }
 
@@ -642,13 +649,33 @@ mod tests {
             platform.calls()
         );
 
-        let confirmations = events
-            .lock()
-            .unwrap()
+        let log = events.lock().unwrap();
+        let requests: Vec<usize> = log
             .iter()
-            .filter(|event| matches!(event, AgentEvent::Confirm(_)))
-            .count();
-        assert_eq!(confirmations, 1, "the user was never asked");
+            .enumerate()
+            .filter(|(_, event)| matches!(event, AgentEvent::Confirm(_)))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(requests.len(), 1, "the user was never asked");
+
+        // The phase drives the window size in the Tauri shell: emitting the
+        // request without it clips Allow/Deny.
+        let phase = log
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    AgentEvent::Phase {
+                        phase: Phase::Confirm,
+                        ..
+                    }
+                )
+            })
+            .expect("the island was never told to show the confirmation");
+        assert!(
+            phase < requests[0],
+            "the confirm phase must precede the request"
+        );
     }
 
     #[tokio::test]
