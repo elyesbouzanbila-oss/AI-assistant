@@ -40,11 +40,10 @@ pub fn apply_phase(window: &WebviewWindow, phase: &str) {
 
     IDLE.store(phase == "idle", Ordering::SeqCst);
 
-    if phase == "idle" {
-        // Let the poll decide; be permissive until it does.
-        let _ = window.set_ignore_cursor_events(false);
-    } else {
-        let _ = window.set_ignore_cursor_events(false);
+    // Let the poll decide while idle; be permissive until it does. Outside idle
+    // every click should land anyway.
+    let _ = window.set_ignore_cursor_events(false);
+    if phase != "idle" {
         let _ = window.set_focus();
     }
 }
@@ -70,7 +69,10 @@ pub fn spawn_passthrough_loop(window: WebviewWindow) {
     std::thread::spawn(move || {
         let mut ignoring = false;
         loop {
-            std::thread::sleep(Duration::from_millis(80));
+            // Only the idle pill needs hover tracking; while open or working
+            // every click should land anyway, so do not wake 12 times a second.
+            let delay = if IDLE.load(Ordering::SeqCst) { 80 } else { 400 };
+            std::thread::sleep(Duration::from_millis(delay));
 
             if !IDLE.load(Ordering::SeqCst) {
                 if ignoring {

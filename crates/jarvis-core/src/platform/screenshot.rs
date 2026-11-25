@@ -6,8 +6,7 @@
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use image::{codecs::jpeg::JpegEncoder, imageops::FilterType, DynamicImage, ImageFormat};
-use std::io::Cursor;
+use image::{codecs::jpeg::JpegEncoder, imageops::FilterType, DynamicImage};
 
 /// Widest edge sent to the model. Enough to read UI text, small enough to be
 /// quick and cheap.
@@ -16,8 +15,13 @@ const JPEG_QUALITY: u8 = 72;
 
 pub fn to_data_url(bytes: &[u8]) -> Result<String> {
     let image = image::load_from_memory(bytes).context("screenshot was not a readable image")?;
-    let resized = downscale(image, MAX_WIDTH);
+    encode(image)
+}
 
+
+/// Resize and JPEG-encode one frame as a data URL.
+fn encode(image: DynamicImage) -> Result<String> {
+    let resized = downscale(image, MAX_WIDTH);
     let mut buffer = Vec::new();
     let mut encoder = JpegEncoder::new_with_quality(&mut buffer, JPEG_QUALITY);
     encoder
@@ -28,17 +32,6 @@ pub fn to_data_url(bytes: &[u8]) -> Result<String> {
         "data:image/jpeg;base64,{}",
         STANDARD.encode(buffer)
     ))
-}
-
-/// Pure encode path, used by tests to round-trip a known image.
-pub fn to_data_url_from_image(image: DynamicImage) -> Result<String> {
-    let resized = downscale(image, MAX_WIDTH);
-    let mut buffer = Vec::new();
-    let mut cursor = Cursor::new(&mut buffer);
-    resized
-        .write_to(&mut cursor, ImageFormat::Png)
-        .context("could not encode image")?;
-    to_data_url(&buffer)
 }
 
 fn downscale(image: DynamicImage, max_width: u32) -> DynamicImage {
@@ -61,7 +54,7 @@ mod tests {
 
     #[test]
     fn produces_a_jpeg_data_url() {
-        let url = to_data_url_from_image(solid(800, 600)).unwrap();
+        let url = encode(solid(800, 600)).unwrap();
         assert!(url.starts_with("data:image/jpeg;base64,"));
 
         let payload = url.trim_start_matches("data:image/jpeg;base64,");
@@ -73,7 +66,7 @@ mod tests {
 
     #[test]
     fn huge_frames_are_downscaled() {
-        let url = to_data_url_from_image(solid(3840, 2160)).unwrap();
+        let url = encode(solid(3840, 2160)).unwrap();
         let bytes = STANDARD
             .decode(url.trim_start_matches("data:image/jpeg;base64,"))
             .unwrap();
@@ -86,7 +79,7 @@ mod tests {
 
     #[test]
     fn small_frames_are_left_alone() {
-        let url = to_data_url_from_image(solid(320, 200)).unwrap();
+        let url = encode(solid(320, 200)).unwrap();
         let bytes = STANDARD
             .decode(url.trim_start_matches("data:image/jpeg;base64,"))
             .unwrap();

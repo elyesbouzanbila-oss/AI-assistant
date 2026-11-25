@@ -22,6 +22,13 @@ pub struct Config {
     /// Optional `JARVIS_STT_MODEL`: transcribes voice when the main model
     /// cannot take audio. Falls back to `model` when unset.
     pub stt_model: Option<String>,
+    /// Optional `JARVIS_STT_BASE_URL`: a different endpoint for voice
+    /// transcription, so chat can run locally while voice stays in the cloud
+    /// (or the reverse). Falls back to `base_url`.
+    pub stt_base_url: Option<String>,
+    /// Optional `JARVIS_STT_API_KEY`: the key for `stt_base_url`. Never falls
+    /// back across hosts, so the chat key cannot leak to another provider.
+    pub stt_api_key: Option<String>,
 }
 
 impl Config {
@@ -57,10 +64,10 @@ impl Config {
             max_steps,
             workspace,
             site_url: env::var("JARVIS_SITE_URL").ok(),
-            stt_model: env::var("JARVIS_STT_MODEL")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty()),
+            stt_model: optional_env("JARVIS_STT_MODEL"),
+            stt_base_url: optional_env("JARVIS_STT_BASE_URL")
+                .map(|value| value.trim_end_matches('/').to_string()),
+            stt_api_key: optional_env("JARVIS_STT_API_KEY"),
         };
         config.validate()?;
         Ok(config)
@@ -82,12 +89,34 @@ impl Config {
             workspace: workspace.into(),
             site_url: None,
             stt_model: None,
+            stt_base_url: None,
+            stt_api_key: None,
         }
     }
 
     /// Model used for voice transcription.
     pub fn transcription_model(&self) -> &str {
         self.stt_model.as_deref().unwrap_or(&self.model)
+    }
+
+    /// Endpoint used for voice transcription.
+    pub fn transcription_base_url(&self) -> &str {
+        self.stt_base_url.as_deref().unwrap_or(&self.base_url)
+    }
+
+    /// Key used for voice transcription. A separate endpoint needs its own key:
+    /// the chat key is only reused when transcription shares that endpoint.
+    pub fn transcription_key(&self) -> &str {
+        match (&self.stt_base_url, &self.stt_api_key) {
+            (None, None) => &self.api_key,
+            (_, Some(key)) => key,
+            (Some(_), None) => "",
+        }
+    }
+
+    /// `POST {stt_base}/chat/completions`
+    pub fn transcription_url(&self) -> String {
+        format!("{}/chat/completions", self.transcription_base_url())
     }
 
     /// OpenRouter speaks the same protocol as OpenAI but wants a `provider/model`
@@ -97,11 +126,17 @@ impl Config {
         endpoint(&self.base_url).host_str() == Some("openrouter.ai")
     }
 
+    /// Loopback endpoints (Ollama and friends) need no credentials.
+    pub fn is_local(&self) -> bool {
+        is_loopback(&self.base_url)
+    }
+
     pub fn validate(&self) -> Result<()> {
-        if self.api_key.trim().is_empty() {
+        if self.api_key.trim().is_empty() && !self.is_local() {
             anyhow::bail!(
                 "JARVIS_API_KEY is not set. Copy .env.example to .env and add a key \
-                 (OpenRouter by default) for an endpoint that supports tool calling and image input."
+                 (OpenRouter by default) for an endpoint that supports tool calling and image input. \
+                 A local endpoint such as Ollama (http://localhost:11434/v1) needs no key."
             );
         }
         if self.model.trim().is_empty() {
@@ -109,6 +144,14 @@ impl Config {
         }
         if !self.base_url.starts_with("http") {
             anyhow::bail!("JARVIS_BASE_URL must start with http:// or https://");
+        }
+        if self.transcription_key().trim().is_empty() && !is_loopback(self.transcription_base_url())
+        {
+            anyhow::bail!(
+                "voice transcription points at {} but has no key. Set JARVIS_STT_API_KEY \
+                 (the chat key is not sent to a different endpoint).",
+                self.transcription_base_url()
+            );
         }
         Ok(())
     }
@@ -130,7 +173,9 @@ impl Config {
 
     fn masked_key(&self) -> String {
         let key = self.api_key.trim();
-        if key.len() <= 6 {
+        if key.is_empty() {
+            "none".to_string()
+        } else if key.len() <= 6 {
             "set".to_string()
         } else {
             let head: String = key.chars().take(4).collect();
@@ -151,6 +196,22 @@ pub fn jarvis_dir() -> Result<PathBuf> {
 /// this only fails for hand-built configs.
 fn endpoint(base_url: &str) -> url::Url {
     url::Url::parse(base_url).unwrap_or_else(|_| url::Url::parse("http://invalid").unwrap())
+}
+
+/// A loopback host needs no API key.
+fn is_loopback(base_url: &str) -> bool {
+    matches!(
+        endpoint(base_url).host_str(),
+        Some("localhost" | "127.0.0.1" | "::1" | "[::1]")
+    )
+}
+
+/// Read a variable, trimmed, treating an empty value as unset.
+fn optional_env(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 pub fn audit_log_path() -> Result<PathBuf> {
@@ -174,18 +235,20 @@ pub fn resolve_in_workspace(workspace: &Path, candidate: &str) -> Option<PathBuf
         return None;
     }
 
-    let joined = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        workspace.join(path)
-    };
-
-    // Prefer real paths when they exist (so a symlink cannot point outside),
-    // and fall back to lexical normalisation for files that are not written yet
-    // and for a workspace directory that has not been created.
+    // Resolve the root first and build the candidate from it: `canonicalize`
+    // returns a Windows verbatim path (`\\\\?\\C:\\...`) while joining onto the raw
+    // workspace does not, and the two never compare equal.
     let root = workspace
         .canonicalize()
         .unwrap_or_else(|_| normalize(workspace));
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+
+    // Prefer real paths when they exist (so a symlink cannot point outside),
+    // and fall back to lexical normalisation for files that are not written yet.
     let normalized = joined.canonicalize().unwrap_or_else(|_| normalize(&joined));
 
     if normalized.starts_with(&root) {
@@ -229,6 +292,17 @@ mod tests {
     }
 
     #[test]
+    fn new_files_are_allowed_when_the_workspace_is_not_canonicalized() {
+        // The tools receive `Config::workspace` (e.g. `~/Jarvis/workspace`),
+        // which is not canonical, while `canonicalize` on Windows returns a
+        // `\\\\?\\` path. Both must still agree on what is inside the workspace.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(resolve_in_workspace(dir.path(), "notes/today.txt").is_some());
+        assert!(resolve_in_workspace(dir.path(), "a/b/c.txt").is_some());
+        assert!(resolve_in_workspace(dir.path(), "../escape.txt").is_none());
+    }
+
+    #[test]
     fn workspace_jail_works_before_the_directory_exists() {
         // A missing workspace must not silently block every file tool.
         let root = Path::new("/tmp/jarvis-definitely-not-created/ws");
@@ -242,6 +316,66 @@ mod tests {
         let mut config = Config::new("https://example.test/v1", "", "m", dir.path());
         assert!(config.validate().is_err());
         config.api_key = "sk-test".into();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn local_endpoints_need_no_key() {
+        let mut config = Config::new("http://localhost:11434/v1", "", "qwen2.5vl", "/tmp/ws");
+        assert!(config.is_local());
+        assert!(config.validate().is_ok());
+
+        config.base_url = "https://api.openai.com/v1".into();
+        assert!(!config.is_local());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn loopback_forms_are_recognised() {
+        for url in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:11434/v1",
+            "http://[::1]:11434/v1",
+        ] {
+            assert!(
+                Config::new(url, "", "m", "/tmp/ws").is_local(),
+                "{url} should count as local"
+            );
+        }
+        assert!(!Config::new("https://openrouter.ai/api/v1", "k", "m", "/tmp/ws").is_local());
+    }
+
+    #[test]
+    fn voice_can_use_a_different_endpoint_and_key() {
+        let mut config = Config::new("http://localhost:11434/v1", "", "qwen2.5vl", "/tmp/ws");
+        // Unset: voice follows chat, and loopback needs no key.
+        assert_eq!(config.transcription_base_url(), "http://localhost:11434/v1");
+        assert_eq!(config.transcription_key(), "");
+        assert!(config.validate().is_ok());
+
+        // A separate endpoint needs its own key; the chat key is never reused.
+        config.stt_base_url = Some("https://api.groq.com/openai/v1".into());
+        config.stt_model = Some("whisper-large-v3-turbo".into());
+        assert!(config.validate().is_err());
+
+        config.stt_api_key = Some("gsk-test".into());
+        assert_eq!(config.transcription_key(), "gsk-test");
+        assert_eq!(
+            config.transcription_url(),
+            "https://api.groq.com/openai/v1/chat/completions"
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn voice_falls_back_to_the_chat_endpoint_and_key() {
+        let mut config = Config::new("https://openrouter.ai/api/v1", "sk-or", "m", "/tmp/ws");
+        config.stt_model = Some("google/gemini-2.5-flash".into());
+        assert_eq!(
+            config.transcription_base_url(),
+            "https://openrouter.ai/api/v1"
+        );
+        assert_eq!(config.transcription_key(), "sk-or");
         assert!(config.validate().is_ok());
     }
 

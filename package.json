@@ -9,8 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "app": "cargo tauri dev",
-    "bundle": "cargo tauri build"
+    "app": "tauri dev",
+    "bundle": "tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

@@ -19,6 +19,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use futures_util::future::BoxFuture;
 
+/// Result text for the model; empty when the action has nothing to report.
 pub type PlatformFuture<'a> = BoxFuture<'a, Result<String>>;
 
 pub trait Platform: Send + Sync {

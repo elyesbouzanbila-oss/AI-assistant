@@ -4,9 +4,6 @@
 //! action reports clearly that the platform is not supported yet, rather than
 //! silently doing nothing.
 
-use anyhow::Result;
-use futures_util::future::BoxFuture;
-
 use super::{Platform, PlatformFuture};
 
 pub struct UnsupportedPlatform;
@@ -49,14 +46,4 @@ impl Platform for UnsupportedPlatform {
     fn screenshot(&self) -> PlatformFuture<'_> {
         Box::pin(async { Err(unsupported()) })
     }
-}
-
-#[allow(dead_code)]
-fn _assert_trait_object() -> Box<dyn Platform> {
-    Box::new(UnsupportedPlatform)
-}
-
-#[allow(dead_code)]
-fn _assert_boxed_future(future: BoxFuture<'static, Result<String>>) {
-    drop(future);
 }

@@ -10,44 +10,20 @@ jobs:
   lint-test:
     name: Lint & Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        rust:
-          - stable
-        node:
-          - 20
     env:
       CARGO_TERM_COLOR: always
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Setup Rust toolchain
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ matrix.rust }}
-          profile: minimal
-          override: true
-
-      - name: Cache Cargo registry
-        uses: actions-rs/cargo@v1
-        with:
-          cache: registry
-
-      - name: Cache Cargo build
-        uses: actions-rs/cargo@v1
-        with:
-          cache: cargo
-
-      - name: Install nightly components (clippy)
-        if: matrix.rust == 'stable'
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
           components: clippy
+
+      - name: Cache Cargo registry and build
+        uses: Swatinem/rust-cache@v2
 
       - name: Rust cargo check
         run: cargo check -p jarvis-core
@@ -55,13 +31,13 @@ jobs:
       - name: Rust cargo test
         run: cargo test -p jarvis-core
 
-      - name: Rust cargo clippy (allow warnings)
+      - name: Rust cargo clippy (warnings are errors)
         run: cargo clippy -p jarvis-core --all-targets -- -D warnings
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 20
           cache: npm
 
       - name: Install dependencies
@@ -82,6 +58,41 @@ jobs:
           keep_files: false
           external_user_token: ${{ secrets.GH_PAGES_TOKEN }}
 
+  # The only job that compiles platform/win.rs and platform/recorder.rs: the
+  # Ubuntu job above builds the stub backend, and Tauri needs GTK/WebKit headers
+  # there, so a workspace build belongs on a Windows runner.
+  windows-build:
+    name: Windows Build
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # tauri::generate_context! reads frontendDist, so ../dist must exist.
+      - name: Vite build
+        run: npm run build
+
+      - name: Rust cargo build (workspace)
+        run: cargo build --workspace
+
   tauri-check:
     name: Tauri App Check
     runs-on: ubuntu-latest
@@ -89,22 +100,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo registry
-        uses: actions-rs/cargo@v1
-        with:
-          cache: registry
-
-      - name: Cache Cargo build
-        uses: actions-rs/cargo@v1
-        with:
-          cache: cargo
+      - name: Cache Cargo registry and build
+        uses: Swatinem/rust-cache@v2
 
       - name: Install front-end dependencies
         run: npm ci

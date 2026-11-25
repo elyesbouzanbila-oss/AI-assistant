@@ -9,7 +9,6 @@
 //! Input injection uses enigo (`SendInput` under the hood).
 
 use anyhow::{bail, Context, Result};
-use futures_util::future::BoxFuture;
 use std::process::Stdio;
 
 use super::{input, screenshot, Platform, PlatformFuture};
@@ -112,6 +111,20 @@ $g.Dispose(); $bmp.Dispose()
 'saved'
 "#;
 
+/// Run one blocking input call off the async runtime. These actions have
+/// nothing to report, so they return an empty result string.
+fn on_input_thread<F>(work: F) -> PlatformFuture<'static>
+where
+    F: FnOnce() -> Result<()> + Send + 'static,
+{
+    Box::pin(async move {
+        tokio::task::spawn_blocking(work)
+            .await
+            .context("input thread panicked")??;
+        Ok(String::new())
+    })
+}
+
 impl Platform for WindowsPlatform {
     fn name(&self) -> &'static str {
         "Windows"
@@ -135,28 +148,16 @@ impl Platform for WindowsPlatform {
 
     fn type_text<'a>(&'a self, text: &'a str) -> PlatformFuture<'a> {
         let text = text.to_string();
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || input::type_text(&text))
-                .await
-                .context("input thread panicked")?
-        })
+        on_input_thread(move || input::type_text(&text))
     }
 
     fn press_keys<'a>(&'a self, combo: &'a str) -> PlatformFuture<'a> {
         let combo = combo.to_string();
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || input::press_keys(&combo))
-                .await
-                .context("input thread panicked")?
-        })
+        on_input_thread(move || input::press_keys(&combo))
     }
 
     fn click(&self, x: i32, y: i32) -> PlatformFuture<'_> {
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || input::click(x, y))
-                .await
-                .context("input thread panicked")?
-        })
+        on_input_thread(move || input::click(x, y))
     }
 
     fn screenshot(&self) -> PlatformFuture<'_> {
@@ -178,14 +179,4 @@ impl Platform for WindowsPlatform {
             screenshot::to_data_url(&bytes)
         })
     }
-}
-
-/// Compile-time proof that the trait object is usable from the app shell.
-pub fn boxed() -> Box<dyn Platform> {
-    Box::new(WindowsPlatform)
-}
-
-#[allow(dead_code)]
-fn assert_future_type<'a>(future: BoxFuture<'a, Result<String>>) {
-    drop(future);
 }

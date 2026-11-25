@@ -40,10 +40,30 @@ JARVIS_SITE_URL=https://example.com   # optional; only sent to openrouter.ai
 ```
 
 Filter for models that support both requirements:
-`https://openrouter.ai/models?supported_parameters=tools,vision`. Z.ai GLM, OpenAI and local Ollama
-configurations are in `.env.example` too. OpenRouter attribution headers (`X-OpenRouter-Title` and
-`HTTP-Referer`) are only built when the base URL host is `openrouter.ai`, so other endpoints never
-receive them.
+`https://openrouter.ai/models?supported_parameters=tools,vision`. Z.ai GLM and OpenAI configurations
+are in `.env.example` too. OpenRouter attribution headers (`X-OpenRouter-Title` and `HTTP-Referer`)
+are only built when the base URL host is `openrouter.ai`, so other endpoints never receive them.
+
+### Running fully locally (Ollama)
+
+Ollama serves the same OpenAI-compatible protocol, so it needs no separate code path: point the base
+URL at it and nothing leaves the machine.
+
+```bash
+ollama pull qwen2.5vl          # the model must do tool calling AND image input
+```
+
+```
+JARVIS_BASE_URL=http://localhost:11434/v1
+JARVIS_MODEL=qwen2.5vl
+```
+
+`JARVIS_API_KEY` can stay empty for a loopback endpoint (`localhost`, `127.0.0.1`, `::1`): the app
+only requires a key for remote endpoints and sends no `Authorization` header when it has none.
+
+Dictation is the exception: Ollama's API takes no audio input. Point `JARVIS_STT_BASE_URL` and
+`JARVIS_STT_API_KEY` at a cloud audio model and voice keeps working while chat stays local — the
+transcript is typed into the input box and then answered by the local model.
 
 ## Using it
 
@@ -58,10 +78,14 @@ Click the mic in the composer (or press **Ctrl+Shift+Space**), speak, and stop. 
 lands in the input box so you can fix a word before sending — nothing runs on its own. Recordings
 stop by themselves after 30 seconds.
 
-It uses no separate speech service: the same endpoint that answers questions transcribes the audio
-(the OpenAI `input_audio` content part), so your existing key covers it. Gemini 2.5 Flash and the
-GPT audio models accept audio; for a text-only main model, point `JARVIS_STT_MODEL` at an
-audio-capable model on the same endpoint.
+By default the endpoint that answers questions also transcribes the audio (the OpenAI `input_audio`
+content part), so your existing key covers it. Gemini 2.5 Flash and the GPT audio models accept
+audio; for a text-only main model, point `JARVIS_STT_MODEL` at an audio-capable model.
+
+Transcription can also live somewhere else entirely: set `JARVIS_STT_BASE_URL` and
+`JARVIS_STT_API_KEY` and the recording is sent there instead. That is what makes a fully local chat
+model usable with cloud dictation. A separate endpoint never inherits `JARVIS_API_KEY`, so the chat
+key cannot leak to another provider.
 
 Capture is Windows MCI (`waveaudio`) through the same hidden PowerShell used for window control,
 so there is no audio dependency. The WAV is written to the temp folder, sent once, and deleted
