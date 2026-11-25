@@ -41,6 +41,8 @@ export interface SettingsView {
   maxSteps: number;
   sttModel: string;
   sttBaseUrl: string;
+  fallbackBaseUrl: string;
+  fallbackModel: string;
   hasApiKey: boolean;
   hasSttApiKey: boolean;
   /** Variables set in `.env`; those fields are read-only until removed there. */
@@ -55,6 +57,9 @@ export interface SettingsDraft {
   maxSteps: number;
   sttModel: string;
   sttBaseUrl: string;
+  /** Local model used when the endpoint above fails; blank disables it. */
+  fallbackBaseUrl: string;
+  fallbackModel: string;
   /** Blank keeps the stored key. */
   apiKey: string;
   sttApiKey: string;
@@ -64,7 +69,7 @@ export interface SettingsDraft {
 export const PHASE_SIZE: Record<Phase, { w: number; h: number }> = {
   idle: { w: 232, h: 48 },
   open: { w: 560, h: 248 },
-  settings: { w: 560, h: 452 },
+  settings: { w: 560, h: 540 },
   working: { w: 560, h: 96 },
   confirm: { w: 560, h: 172 },
   done: { w: 560, h: 72 },

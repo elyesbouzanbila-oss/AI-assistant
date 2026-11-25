@@ -4,6 +4,7 @@
 //! window: commands in, events out, plus the global shortcut.
 
 mod island;
+mod ollama;
 
 use std::sync::Arc;
 
@@ -44,7 +45,16 @@ impl Runtime {
                 let audit = config::audit_log_path()
                     .map(Audit::new)
                     .unwrap_or_else(|_| Audit::disabled());
-                let llm = Arc::new(LlmClient::new(&config));
+                let mut client = LlmClient::new(&config);
+                if let Some(fallback) = config.fallback() {
+                    tracing::info!("falling back to {} at {}", fallback.model, fallback.base_url);
+                    let endpoint = fallback.base_url.clone();
+                    let model = fallback.model.clone();
+                    client = client.with_fallback(&fallback).with_wake(Arc::new(move || {
+                        ollama::ensure(&endpoint, &model);
+                    }));
+                }
+                let llm = Arc::new(client);
                 let agent = Agent::from_config(config, platform::current(), audit, emit.clone());
                 Self {
                     agent: Some(Arc::new(agent)),
@@ -213,6 +223,8 @@ struct SettingsView {
     max_steps: usize,
     stt_model: String,
     stt_base_url: String,
+    fallback_base_url: String,
+    fallback_model: String,
     has_api_key: bool,
     has_stt_api_key: bool,
     /// Variables set in the environment or `.env`; those fields are read-only.
@@ -234,6 +246,10 @@ struct SettingsDraft {
     stt_model: String,
     #[serde(default)]
     stt_base_url: String,
+    #[serde(default)]
+    fallback_base_url: String,
+    #[serde(default)]
+    fallback_model: String,
     /// Only sent when the user typed a new one: the panel never receives the
     /// stored key, so a blank field means "keep it" rather than "erase it".
     #[serde(default)]
@@ -262,6 +278,8 @@ fn settings_view(error: Option<String>) -> Result<SettingsView, String> {
         max_steps: resolved.max_steps,
         stt_model: resolved.stt_model.unwrap_or_default(),
         stt_base_url: resolved.stt_base_url.unwrap_or_default(),
+        fallback_base_url: resolved.fallback_base_url.unwrap_or_default(),
+        fallback_model: resolved.fallback_model.unwrap_or_default(),
         has_api_key: !resolved.api_key.trim().is_empty(),
         has_stt_api_key: resolved
             .stt_api_key
@@ -289,6 +307,8 @@ fn save_settings(state: State<'_, AppState>, draft: SettingsDraft) -> Result<Set
     settings.max_steps = Some(draft.max_steps.clamp(1, 24) as usize);
     settings.stt_model = non_empty(&draft.stt_model);
     settings.stt_base_url = non_empty(&draft.stt_base_url);
+    settings.fallback_base_url = non_empty(&draft.fallback_base_url);
+    settings.fallback_model = non_empty(&draft.fallback_model);
     if let Some(key) = non_empty(&draft.api_key) {
         settings.api_key = Some(key);
     }

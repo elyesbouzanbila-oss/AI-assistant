@@ -99,7 +99,7 @@ body.live .island {
 }
 .island[data-phase="settings"] {
   --w: 560px;
-  --h: 452px;
+  --h: 540px;
 }
 .island[data-phase="working"] {
   --w: 560px;
@@ -708,6 +708,13 @@ body.live .island {
   color: var(--muted);
   text-transform: none;
   letter-spacing: 0;
+}
+
+.field-note {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--muted);
 }
 
 .settings-foot {
