@@ -63,13 +63,22 @@ export interface SettingsDraft {
   /** Blank keeps the stored key. */
   apiKey: string;
   sttApiKey: string;
+  /** Explicit removal, since a blank field cannot express it. */
+  clearApiKey: boolean;
+  clearSttApiKey: boolean;
+}
+
+/** What the panel's test button learns without spending tokens. */
+export interface ConnectionReport {
+  latencyMs: number;
+  models: string[];
 }
 
 /** Pixel size of the island per phase. Mirrored in src-tauri/src/island.rs. */
 export const PHASE_SIZE: Record<Phase, { w: number; h: number }> = {
   idle: { w: 232, h: 48 },
   open: { w: 560, h: 248 },
-  settings: { w: 560, h: 540 },
+  settings: { w: 560, h: 620 },
   working: { w: 560, h: 96 },
   confirm: { w: 560, h: 172 },
   done: { w: 560, h: 72 },

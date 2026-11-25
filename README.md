@@ -32,6 +32,12 @@ Everything is in the island's gear menu and saved to `~/Jarvis/settings.json`: e
 model, API key, max steps, and the optional voice model / endpoint / key. **Saving applies
 immediately** — no restart.
 
+**Presets** fill an endpoint and model in one click (OpenRouter, OpenAI, Ollama, Z.ai).
+**Test** checks the values currently in the form, without saving them and without spending
+tokens: it calls `/models`, so it proves the URL, the network path and the key together, and
+hands the returned ids to the Model field as autocomplete. **Forget** removes a stored key,
+which an empty field cannot express; nothing shows the key itself, ever.
+
 `.env` still works and takes precedence, so an existing setup keeps running and the fields
 it controls show an `env` tag. `.env.example` documents every variable, including the few
 things the panel deliberately leaves out (OpenRouter's `JARVIS_SITE_URL`).

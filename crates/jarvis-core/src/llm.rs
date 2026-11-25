@@ -398,6 +398,50 @@ impl LlmClient {
         )))
     }
 
+    /// The models this endpoint advertises, used by the settings panel to test a
+    /// configuration before saving it. `/models` costs no tokens and proves the
+    /// URL, the network path and the key in one round trip.
+    pub async fn list_models(&self) -> Result<Vec<String>> {
+        let url = format!(
+            "{}/models",
+            self.chat.url.trim_end_matches("/chat/completions")
+        );
+
+        let mut request = self
+            .http
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(20));
+        if !self.chat.api_key.trim().is_empty() {
+            request = request.bearer_auth(&self.chat.api_key);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("could not reach {url}"))?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            let snippet: String = body.chars().take(200).collect();
+            bail!("{url} returned {status}: {snippet}");
+        }
+
+        let value: Value = serde_json::from_str(&body)
+            .with_context(|| format!("{url} did not return JSON"))?;
+        let models = value
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.get("id").and_then(Value::as_str))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(models)
+    }
+
     /// Transcribe a WAV recording with the model's audio input, so voice needs
     /// no second service or key: the endpoint that answers also listens.
     pub async fn transcribe(&self, wav: &[u8]) -> Result<String> {
@@ -723,6 +767,45 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         port
+    }
+
+    #[tokio::test]
+    async fn list_models_reads_the_ids_the_endpoint_advertises() {
+        let (base, handle) = one_shot(
+            200,
+            "application/json",
+            r#"{"data":[{"id":"alpha"},{"id":"beta"},{"missing":"id"}]}"#,
+        );
+
+        let config = Config::new(base, "sk-test", "alpha", "/tmp/ws");
+        let models = LlmClient::new(&config)
+            .list_models()
+            .await
+            .expect("the endpoint answered");
+
+        assert_eq!(models, vec!["alpha".to_string(), "beta".to_string()]);
+        handle.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_models_reports_a_rejected_key() {
+        let (base, handle) = one_shot(
+            401,
+            "application/json",
+            r#"{"error":{"message":"invalid api key"}}"#,
+        );
+
+        let config = Config::new(base, "sk-wrong", "alpha", "/tmp/ws");
+        let error = LlmClient::new(&config)
+            .list_models()
+            .await
+            .expect_err("a rejected key is not success");
+
+        let message = format!("{error:#}");
+        assert!(message.contains("401"), "{message}");
+        assert!(message.contains("invalid api key"), "{message}");
+        assert!(!message.contains("sk-wrong"), "the key must not appear: {message}");
+        handle.join().unwrap();
     }
 
     #[tokio::test]
