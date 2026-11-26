@@ -15,6 +15,9 @@ const MAX_READ_BYTES: u64 = 64 * 1024;
 pub struct ToolContext {
     pub workspace: PathBuf,
     pub platform: Arc<dyn Platform>,
+    /// Whether the model can take an image. Off means the screenshot tool is
+    /// neither offered nor executed: its result would end the turn.
+    pub vision: bool,
 }
 
 pub struct ToolOutcome {
@@ -27,8 +30,8 @@ pub struct ToolOutcome {
 }
 
 /// Tool definitions in OpenAI `tools` format.
-pub fn schema_values() -> Vec<Value> {
-    vec![
+pub fn schema_values(vision: bool) -> Vec<Value> {
+    let mut schemas = vec![
         function(
             "open_app",
             "Open an application by name, or open a URL / settings URI. Examples: 'Notepad', 'Spotify', 'https://example.com', 'ms-settings:display'.",
@@ -122,7 +125,16 @@ pub fn schema_values() -> Vec<Value> {
             "Report the operating system, available capabilities and workspace path.",
             json!({ "type": "object", "properties": {} }),
         ),
-    ]
+    ];
+
+    // A model that cannot take an image must not be offered the tool that
+    // makes one: the provider rejects the whole turn when the screenshot
+    // comes back as an image part.
+    if !vision {
+        schemas.retain(|schema| schema["function"]["name"] != "screenshot");
+    }
+
+    schemas
 }
 
 fn function(name: &str, description: &str, parameters: Value) -> Value {
@@ -212,6 +224,9 @@ pub async fn execute(name: &str, args: &Value, ctx: &ToolContext) -> Result<Tool
             Ok(done("clicked".to_string(), summarise(name, args)))
         }
         "screenshot" => {
+            if !ctx.vision {
+                bail!("screenshots are disabled: this model cannot take an image");
+            }
             let image = platform.screenshot().await?;
             Ok(ToolOutcome {
                 text: "Screenshot attached to the conversation. Look at it before acting."
@@ -312,12 +327,13 @@ mod tests {
         ToolContext {
             workspace: std::env::temp_dir().join("jarvis-tool-tests"),
             platform: platform::current(),
+            vision: true,
         }
     }
 
     #[test]
     fn every_tool_has_a_schema_and_a_summary() {
-        let schemas = schema_values();
+        let schemas = schema_values(true);
         assert_eq!(schemas.len(), 11);
 
         for schema in &schemas {
@@ -329,6 +345,19 @@ mod tests {
                 "bad schema for {name}"
             );
         }
+    }
+
+    #[test]
+    fn vision_disabled_hides_the_screenshot_tool() {
+        let names = |vision: bool| {
+            schema_values(vision)
+                .iter()
+                .map(|schema| schema["function"]["name"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert!(names(true).iter().any(|name| name == "screenshot"));
+        assert!(!names(false).iter().any(|name| name == "screenshot"));
     }
 
     #[test]
@@ -362,6 +391,7 @@ mod tests {
         let ctx = ToolContext {
             workspace: dir.path().to_path_buf(),
             platform: platform::current(),
+            vision: true,
         };
 
         let write = execute(
@@ -385,6 +415,7 @@ mod tests {
         let ctx = ToolContext {
             workspace: dir.path().to_path_buf(),
             platform: platform::current(),
+            vision: true,
         };
 
         assert!(execute(

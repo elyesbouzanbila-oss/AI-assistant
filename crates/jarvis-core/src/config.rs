@@ -84,6 +84,9 @@ pub struct Config {
     pub fallback_api_key: Option<String>,
     /// `JARVIS_SPEAK`: read an answer aloud when the turn started by dictation.
     pub speak: bool,
+    /// `JARVIS_VISION`: offer the screenshot tool. Off for a model whose
+    /// endpoint rejects image input, so a turn cannot die on a screenshot.
+    pub vision: bool,
     /// `JARVIS_VOICE`: SAPI voice name; empty means the system default.
     pub voice: String,
     /// `JARVIS_SPEECH_RATE`: SAPI rate, clamped to -10..=10.
@@ -131,6 +134,7 @@ impl Config {
             fallback_model: resolved.fallback_model,
             fallback_api_key: resolved.fallback_api_key,
             speak: resolved.speak,
+            vision: resolved.vision,
             voice: resolved.voice,
             speech_rate: resolved.speech_rate,
         };
@@ -163,6 +167,7 @@ impl Config {
             fallback_model: None,
             fallback_api_key: None,
             speak: true,
+            vision: true,
             voice: String::new(),
             speech_rate: 0,
         }
@@ -328,6 +333,7 @@ pub struct Settings {
     pub fallback_model: Option<String>,
     pub fallback_api_key: Option<String>,
     pub speak: Option<bool>,
+    pub vision: Option<bool>,
     pub voice: Option<String>,
     pub speech_rate: Option<i32>,
 }
@@ -353,12 +359,13 @@ pub struct Resolved {
     pub fallback_model: Option<String>,
     pub fallback_api_key: Option<String>,
     pub speak: bool,
+    pub vision: bool,
     pub voice: String,
     pub speech_rate: i32,
 }
 
 /// Variables that override the settings file.
-pub const ENV_NAMES: [&str; 17] = [
+pub const ENV_NAMES: [&str; 18] = [
     "JARVIS_BASE_URL",
     "JARVIS_API_KEY",
     "JARVIS_MODEL",
@@ -374,6 +381,7 @@ pub const ENV_NAMES: [&str; 17] = [
     "JARVIS_FALLBACK_MODEL",
     "JARVIS_FALLBACK_API_KEY",
     "JARVIS_SPEAK",
+    "JARVIS_VISION",
     "JARVIS_VOICE",
     "JARVIS_SPEECH_RATE",
 ];
@@ -433,16 +441,14 @@ fn resolve_with(settings: &Settings, env: impl Fn(&str) -> Option<String>) -> Re
         .map(|value| value.trim_end_matches('/').to_string()),
         fallback_model: value("JARVIS_FALLBACK_MODEL", settings.fallback_model.clone()),
         fallback_api_key: value("JARVIS_FALLBACK_API_KEY", settings.fallback_api_key.clone()),
-        // Only "off" spellings disable it, so an unset or odd value keeps the
-        // default: a silent assistant should be a choice, never an accident.
-        speak: value("JARVIS_SPEAK", settings.speak.map(|on| on.to_string()))
-            .map(|flag| {
-                !matches!(
-                    flag.to_ascii_lowercase().as_str(),
-                    "0" | "false" | "no" | "off"
-                )
-            })
-            .unwrap_or(true),
+        speak: enabled(value(
+            "JARVIS_SPEAK",
+            settings.speak.map(|on| on.to_string()),
+        )),
+        vision: enabled(value(
+            "JARVIS_VISION",
+            settings.vision.map(|on| on.to_string()),
+        )),
         voice: value("JARVIS_VOICE", settings.voice.clone()).unwrap_or_default(),
         speech_rate: value(
             "JARVIS_SPEECH_RATE",
@@ -452,6 +458,19 @@ fn resolve_with(settings: &Settings, env: impl Fn(&str) -> Option<String>) -> Re
         .unwrap_or(0)
         .clamp(-10, 10),
     }
+}
+
+/// Only "off" spellings disable a switch, so an unset or odd value keeps the
+/// default: a capability is turned off on purpose, never by accident.
+fn enabled(value: Option<String>) -> bool {
+    value
+        .map(|flag| {
+            !matches!(
+                flag.to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+        .unwrap_or(true)
 }
 
 fn completions_url(base_url: &str) -> String {
@@ -641,6 +660,23 @@ mod tests {
         assert!(config.validate().is_err());
         config.api_key = "sk-test".into();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn vision_is_on_by_default_and_only_an_explicit_off_disables_it() {
+        assert!(resolve_with(&Settings::default(), |_| None).vision);
+
+        let off = Settings {
+            vision: Some(false),
+            ..Settings::default()
+        };
+        assert!(!resolve_with(&off, |_| None).vision);
+        assert!(
+            resolve_with(&off, |name| (name == "JARVIS_VISION")
+                .then(|| "on".to_string()))
+            .vision,
+            "the environment wins over the saved file"
+        );
     }
 
     #[test]

@@ -176,6 +176,7 @@ export async function saveSettings(
     fallbackBaseUrl: draft.fallbackBaseUrl,
     fallbackModel: draft.fallbackModel,
     speak: draft.speak,
+    vision: draft.vision,
     voice: draft.voice,
     speechRate: draft.speechRate,
     hasApiKey: draft.clearApiKey
@@ -229,6 +230,7 @@ let demoSettings: SettingsView = {
   fallbackBaseUrl: "http://localhost:11434/v1",
   fallbackModel: "minicpm5:latest",
   speak: true,
+  vision: true,
   voice: "",
   speechRate: 0,
   hasApiKey: true,
