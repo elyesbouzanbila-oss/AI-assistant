@@ -177,6 +177,7 @@ panel under Voice.
 | `scroll` | Wheel notches at the pointer (or given coordinates) |
 | `list_files` | One level of the workspace, jailed like the file tools |
 | `clipboard_get` / `clipboard_set` | Clipboard text; reading needs an Allow chip |
+| `remember` | Saves one fact about you to `~/Jarvis/memory.md`, injected into the prompt |
 | `system_info` | OS, backend, workspace |
 
 ## Safety model
@@ -194,6 +195,24 @@ panel under Voice.
 - The API key lives in `~/Jarvis/settings.json` or `.env`, read only by the Rust process. The
   webview learns only whether a key is stored, never its value, and the key is never written to
   the audit log.
+
+## Memory
+
+Three plain text files in `~/Jarvis`. Nothing leaves the machine.
+
+| File | What it holds | Limits |
+|---|---|---|
+| `transcript.json` | The last 40 turns, text only | The island repaints them after a restart; the model gets the last 12 messages back, never tool calls, results or screenshots |
+| `memory.md` | Facts you asked it to keep, one `- fact` per line | 500 characters per fact, 1 500 characters injected into the prompt, newest first |
+| `approvals.json` | Approvals granted with **Always allow** | Only `open_app`, `close_app` and `focus_window` |
+
+- **Always allow** appears on the chip only for those three tools. `click`, `type_text`,
+  `press_keys`, `write_file` and clipboard reads ask every time: they have no stable target
+  to remember, and a remembered approval never overrides a policy block.
+- Saving settings rebuilds the runtime but keeps the conversation: memory is stored
+  outside it.
+- The settings panel shows the counts and can forget either the conversation or the
+  remembered permissions; deleting the files by hand is just as safe.
 
 ## Layout
 

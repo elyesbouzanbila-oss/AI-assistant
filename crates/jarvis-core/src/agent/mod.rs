@@ -14,6 +14,7 @@ use tokio::sync::oneshot;
 use crate::audit::Audit;
 use crate::config::Config;
 use crate::llm::{ChatMessage, Completion, LlmClient};
+use crate::memory::{self, Memory};
 use crate::platform::Platform;
 use crate::policy::{self, Verdict};
 use crate::tools::{self, ToolContext};
@@ -35,6 +36,9 @@ pub struct ConfirmRequest {
     pub id: String,
     pub tool: String,
     pub summary: String,
+    /// Whether the chip may offer "Always allow": only a tool with a stable
+    /// target can have its approval remembered.
+    pub remember: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -69,9 +73,17 @@ impl Completer for LlmClient {
     }
 }
 
+/// What the user chose on a confirmation chip.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Decision {
+    pub allow: bool,
+    /// The "Always allow" button: remember this action for next time.
+    pub remember: bool,
+}
+
 struct Pending {
     id: String,
-    reply: oneshot::Sender<bool>,
+    reply: oneshot::Sender<Decision>,
 }
 
 pub struct Agent {
@@ -80,6 +92,7 @@ pub struct Agent {
     platform: Arc<dyn Platform>,
     audit: Audit,
     emit: Emitter,
+    memory: Memory,
     history: Mutex<Vec<ChatMessage>>,
     pending: Mutex<Option<Pending>>,
     cancelled: AtomicBool,
@@ -93,6 +106,7 @@ impl Agent {
         completer: Arc<dyn Completer>,
         audit: Audit,
         emit: Emitter,
+        memory: Memory,
     ) -> Self {
         Self {
             config,
@@ -100,7 +114,8 @@ impl Agent {
             platform,
             audit,
             emit,
-            history: Mutex::new(Vec::new()),
+            history: Mutex::new(replayed(&memory)),
+            memory,
             pending: Mutex::new(None),
             cancelled: AtomicBool::new(false),
             confirm_timeout: Duration::from_secs(10),
@@ -110,6 +125,11 @@ impl Agent {
     pub fn with_confirm_timeout(mut self, timeout: Duration) -> Self {
         self.confirm_timeout = timeout;
         self
+    }
+
+    /// The store shared with the shell and the panel.
+    pub fn memory(&self) -> &Memory {
+        &self.memory
     }
 
     pub fn history(&self) -> Vec<ChatMessage> {
@@ -137,12 +157,12 @@ impl Agent {
             guard.take()
         };
         if let Some(pending) = taken {
-            let _ = pending.reply.send(false);
+            let _ = pending.reply.send(Decision::default());
         }
     }
 
     /// Answer a confirmation request from the UI.
-    pub fn confirm(&self, id: &str, allow: bool) {
+    pub fn confirm(&self, id: &str, allow: bool, remember: bool) {
         let taken = {
             let mut guard = match self.pending.lock() {
                 Ok(guard) => guard,
@@ -159,7 +179,7 @@ impl Agent {
             }
         };
         if let Some(pending) = taken {
-            let _ = pending.reply.send(allow);
+            let _ = pending.reply.send(Decision { allow, remember });
         }
     }
 
@@ -167,6 +187,7 @@ impl Agent {
         self.cancelled.store(false, Ordering::SeqCst);
 
         self.push(ChatMessage::user(prompt.to_string()));
+        self.memory.append_turn(memory::Role::User, prompt);
         self.phase(Phase::Working, Some("Thinking".to_string()));
 
         let schemas = tools::schema_values(self.config.vision);
@@ -174,6 +195,7 @@ impl Agent {
             workspace: self.config.workspace.clone(),
             platform: self.platform.clone(),
             vision: self.config.vision,
+            memory: self.memory.clone(),
         };
 
         for _step in 0..self.config.max_steps {
@@ -185,6 +207,7 @@ impl Agent {
             let mut messages = vec![ChatMessage::system(system_prompt(
                 &self.config,
                 self.platform.name(),
+                &self.memory.facts(),
             ))];
             messages.extend(self.snapshot());
 
@@ -210,6 +233,7 @@ impl Agent {
                     completion.content.clone()
                 };
                 self.push(ChatMessage::assistant(completion.content, Vec::new()));
+                self.memory.append_turn(memory::Role::Assistant, &answer);
                 self.emit(AgentEvent::Final(answer));
                 return Ok(());
             }
@@ -241,13 +265,36 @@ impl Agent {
                         continue;
                     }
                     Verdict::Confirm => {
-                        if !self.request_permission(&name, &summary).await {
-                            self.audit.record(&name, &args, "denied by user");
-                            self.push(ChatMessage::tool(
-                                call.id.clone(),
-                                "The user denied this action. Do not retry it; ask what they would prefer.",
-                            ));
-                            continue;
+                        let target = policy::target(&name, &args).map(str::to_string);
+                        let remembered = target
+                            .as_deref()
+                            .map(|target| self.memory.is_allowed(&name, target))
+                            .unwrap_or(false);
+                        if remembered {
+                            // A remembered approval skips the chip, never the
+                            // policy: this branch is only reached for Confirm.
+                            self.audit.record(&name, &args, "allowed by memory");
+                        } else {
+                            let rememberable = memory::is_rememberable(&name)
+                                && target.as_deref().map(str::trim).is_some_and(|t| !t.is_empty());
+                            let decision = self
+                                .request_permission(&name, &summary, rememberable)
+                                .await;
+                            if !decision.allow {
+                                self.audit.record(&name, &args, "denied by user");
+                                self.push(ChatMessage::tool(
+                                    call.id.clone(),
+                                    "The user denied this action. Do not retry it; ask what they would prefer.",
+                                ));
+                                continue;
+                            }
+                            if decision.remember {
+                                if let Some(target) = target.as_deref() {
+                                    if let Err(error) = self.memory.allow(&name, target) {
+                                        tracing::warn!("could not remember the approval: {error:#}");
+                                    }
+                                }
+                            }
                         }
                     }
                     Verdict::Safe => {}
@@ -288,18 +335,19 @@ impl Agent {
             "I stopped after {} steps without finishing. Ask me to continue if you want me to keep going.",
             self.config.max_steps
         );
+        self.memory.append_turn(memory::Role::Assistant, &message);
         self.emit(AgentEvent::Final(message));
         Ok(())
     }
 
-    async fn request_permission(&self, tool: &str, summary: &str) -> bool {
+    async fn request_permission(&self, tool: &str, summary: &str, remember: bool) -> Decision {
         let id = format!("c-{}", chrono::Local::now().timestamp_micros());
         let (tx, rx) = oneshot::channel();
 
         {
             let mut guard = match self.pending.lock() {
                 Ok(guard) => guard,
-                Err(_) => return false,
+                Err(_) => return Decision::default(),
             };
             *guard = Some(Pending {
                 id: id.clone(),
@@ -315,12 +363,13 @@ impl Agent {
             id: id.clone(),
             tool: tool.to_string(),
             summary: summary.to_string(),
+            remember,
         }));
 
-        let allowed = match tokio::time::timeout(self.confirm_timeout, rx).await {
-            Ok(Ok(allow)) => allow,
+        let decision = match tokio::time::timeout(self.confirm_timeout, rx).await {
+            Ok(Ok(decision)) => decision,
             // Timed out, or the sender was dropped: treat as "no".
-            _ => false,
+            _ => Decision::default(),
         };
 
         if let Ok(mut guard) = self.pending.lock() {
@@ -337,9 +386,9 @@ impl Agent {
         // window, and a denial would otherwise strand the island at that size.
         self.phase(
             Phase::Working,
-            Some(if allowed { "Approved" } else { "Cancelled" }.to_string()),
+            Some(if decision.allow { "Approved" } else { "Cancelled" }.to_string()),
         );
-        allowed
+        decision
     }
 
     fn push(&self, message: ChatMessage) {
@@ -379,7 +428,25 @@ fn trim(history: &mut Vec<ChatMessage>) {
     history.drain(..drop_count);
 }
 
-fn system_prompt(config: &Config, platform: &str) -> String {
+/// The tail of the stored conversation as plain text turns. Tool calls and
+/// images are never replayed: a provider rejects them out of order, and a
+/// stale screenshot is worse than none.
+fn replayed(memory: &Memory) -> Vec<ChatMessage> {
+    let turns = memory.transcript();
+    let start = turns.len().saturating_sub(memory::REPLAYED_MESSAGES);
+    turns[start..]
+        .iter()
+        .map(|turn| {
+            let role = match turn.role {
+                memory::Role::User => "user",
+                memory::Role::Assistant => "assistant",
+            };
+            ChatMessage::plain(role, turn.text.clone())
+        })
+        .collect()
+}
+
+fn system_prompt(config: &Config, platform: &str, facts: &str) -> String {
     let capabilities = if config.vision {
         "You can see the screen (screenshot) and act: open and close applications, \
          focus windows, type text, press key combinations, click, scroll, wait for a \
@@ -399,6 +466,15 @@ fn system_prompt(config: &Config, platform: &str) -> String {
     };
     let pacing =
         "- After opening an app, wait for its window by title instead of guessing at a delay.";
+    // Only present when something was actually remembered, so a fresh install
+    // does not send an empty heading to the model.
+    let knowledge = if facts.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nWhat you know about the user (from earlier conversations; trust it, but the screen and this message win):\n{facts}"
+        )
+    };
 
     format!(
         r#"You are Jarvis, the user's desktop assistant: you run on this machine and operate it for them.
@@ -415,7 +491,7 @@ How long your answers are:
 - When the user asks you to explain something, be as thorough as the question deserves.
 
 What you can do:
-{capabilities}
+{capabilities}{knowledge}
 
 How to work:
 {sight}
@@ -590,13 +666,41 @@ mod tests {
         Arc<ScriptedCompleter>,
         Arc<Mutex<Vec<AgentEvent>>>,
     ) {
+        let memory_dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        agent_with_memory(
+            config,
+            replies,
+            platform,
+            confirm_timeout,
+            Memory::new(memory_dir.path().to_path_buf()),
+        )
+    }
+
+    fn agent_with_memory(
+        config: Config,
+        replies: Vec<Completion>,
+        platform: Arc<FakePlatform>,
+        confirm_timeout: Duration,
+        memory: Memory,
+    ) -> (
+        Arc<Agent>,
+        Arc<ScriptedCompleter>,
+        Arc<Mutex<Vec<AgentEvent>>>,
+    ) {
         let completer = ScriptedCompleter::new(replies);
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
         let emit: Emitter = Arc::new(move |event| sink.lock().unwrap().push(event));
 
-        let agent = Agent::new(config, platform, completer.clone(), Audit::disabled(), emit)
-            .with_confirm_timeout(confirm_timeout);
+        let agent = Agent::new(
+            config,
+            platform,
+            completer.clone(),
+            Audit::disabled(),
+            emit,
+            memory,
+        )
+        .with_confirm_timeout(confirm_timeout);
 
         (Arc::new(agent), completer, events)
     }
@@ -744,7 +848,7 @@ mod tests {
                         _ => None,
                     });
                     if let Some(id) = id {
-                        agent.confirm(&id, true);
+                        agent.confirm(&id, true, false);
                         return;
                     }
                     tokio::time::sleep(Duration::from_millis(5)).await;
@@ -859,7 +963,7 @@ mod tests {
     #[test]
     fn system_prompt_mentions_the_platform_and_workspace() {
         let config = Config::new("https://x.test/v1", "k", "m", "/tmp/jarvis-ws");
-        let prompt = system_prompt(&config, "Windows");
+        let prompt = system_prompt(&config, "Windows", "");
         assert!(prompt.contains("Windows"));
         assert!(prompt.contains("/tmp/jarvis-ws"));
         assert!(prompt.contains("screenshot"));
@@ -889,7 +993,7 @@ mod tests {
         );
         config.vision = false;
 
-        let prompt = system_prompt(&config, "Windows");
+        let prompt = system_prompt(&config, "Windows", "");
         assert!(prompt.contains("cannot see the screen"));
         assert!(!prompt.contains("Take a screenshot"));
 
@@ -918,5 +1022,191 @@ mod tests {
             !sent_an_image,
             "an image reached a model that cannot accept one"
         );
+    }
+
+    #[tokio::test]
+    async fn a_remembered_approval_skips_the_chip() {
+        let platform = FakePlatform::new();
+        let dir = tempfile::tempdir().unwrap();
+        Memory::new(dir.path())
+            .allow("open_app", "Notepad")
+            .unwrap();
+
+        let replies = vec![
+            Completion {
+                content: String::new(),
+                tool_calls: vec![call(
+                    "call_1",
+                    "open_app",
+                    serde_json::json!({ "name": "Notepad" }),
+                )],
+            },
+            Completion {
+                content: "Notepad is open.".to_string(),
+                tool_calls: Vec::new(),
+            },
+        ];
+        let config = Config::new(
+            "https://example.test/v1",
+            "test-key",
+            "test-model",
+            dir.path().display().to_string(),
+        );
+        // A short timeout would deny a chip, so running proves it never asked.
+        let (agent, _completer, events) = agent_with_memory(
+            config,
+            replies,
+            platform.clone(),
+            Duration::from_millis(50),
+            Memory::new(dir.path()),
+        );
+
+        agent.ask("open notepad").await.unwrap();
+
+        assert_eq!(platform.calls(), vec!["open_app:Notepad".to_string()]);
+        assert!(
+            !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, AgentEvent::Confirm(_))),
+            "a remembered action asked again"
+        );
+    }
+
+    #[tokio::test]
+    async fn always_allow_stores_the_approval() {
+        let platform = FakePlatform::new();
+        let dir = tempfile::tempdir().unwrap();
+        let replies = vec![
+            Completion {
+                content: String::new(),
+                tool_calls: vec![call(
+                    "call_1",
+                    "open_app",
+                    serde_json::json!({ "name": "Spotify" }),
+                )],
+            },
+            Completion {
+                content: "Spotify is open.".to_string(),
+                tool_calls: Vec::new(),
+            },
+        ];
+        let config = Config::new(
+            "https://example.test/v1",
+            "test-key",
+            "test-model",
+            dir.path().display().to_string(),
+        );
+        let (agent, _completer, events) = agent_with_memory(
+            config,
+            replies,
+            platform.clone(),
+            Duration::from_secs(2),
+            Memory::new(dir.path()),
+        );
+
+        let watcher = {
+            let agent = agent.clone();
+            let events = events.clone();
+            tokio::spawn(async move {
+                for _ in 0..200 {
+                    let id = events.lock().unwrap().iter().find_map(|event| match event {
+                        AgentEvent::Confirm(request) => Some(request.id.clone()),
+                        _ => None,
+                    });
+                    if let Some(id) = id {
+                        // Allow, and always: the chip's middle button.
+                        agent.confirm(&id, true, true);
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+        };
+
+        agent.ask("open spotify").await.unwrap();
+        watcher.await.unwrap();
+
+        assert!(
+            Memory::new(dir.path()).is_allowed("open_app", "spotify"),
+            "Always allow did not remember the approval"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finished_turn_is_written_to_the_transcript() {
+        let platform = FakePlatform::new();
+        let dir = tempfile::tempdir().unwrap();
+        let replies = vec![Completion {
+            content: "Tea, then.".to_string(),
+            tool_calls: Vec::new(),
+        }];
+        let config = Config::new(
+            "https://example.test/v1",
+            "test-key",
+            "test-model",
+            dir.path().display().to_string(),
+        );
+        let (agent, _completer, _events) = agent_with_memory(
+            config,
+            replies,
+            platform,
+            Duration::from_secs(1),
+            Memory::new(dir.path()),
+        );
+
+        agent.ask("what should I drink?").await.unwrap();
+
+        let turns = Memory::new(dir.path()).transcript();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].text, "what should I drink?");
+        assert_eq!(turns[1].text, "Tea, then.");
+    }
+
+    #[tokio::test]
+    async fn a_fresh_agent_replays_the_stored_turns() {
+        let platform = FakePlatform::new();
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Memory::new(dir.path());
+        memory.append_turn(memory::Role::User, "my name is Ilyes");
+        memory.append_turn(memory::Role::Assistant, "Noted.");
+
+        let replies = vec![Completion {
+            content: "Ilyes.".to_string(),
+            tool_calls: Vec::new(),
+        }];
+        let config = Config::new(
+            "https://example.test/v1",
+            "test-key",
+            "test-model",
+            dir.path().display().to_string(),
+        );
+        let (agent, completer, _events) = agent_with_memory(
+            config,
+            replies,
+            platform,
+            Duration::from_secs(1),
+            memory,
+        );
+
+        agent.ask("what is my name?").await.unwrap();
+
+        let seen = completer.seen();
+        assert!(
+            seen[0]
+                .iter()
+                .any(|message| message.content.as_str() == Some("my name is Ilyes")),
+            "the earlier turn was not replayed"
+        );
+    }
+
+    #[test]
+    fn facts_reach_the_system_prompt() {
+        let config = Config::new("https://x.test/v1", "k", "m", "/tmp/jarvis-ws");
+        let with = system_prompt(&config, "Windows", "- prefers dark mode");
+        assert!(with.contains("prefers dark mode"));
+        let without = system_prompt(&config, "Windows", "");
+        assert!(!without.contains("What you know about the user"));
     }
 }

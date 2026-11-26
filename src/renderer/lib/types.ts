@@ -12,6 +12,8 @@ export interface ConfirmRequest {
   tool: string;
   /** Human-readable one-liner shown in the island, e.g. `Open "Notepad"`. */
   summary: string;
+  /** Set when the chip may offer "Always allow": the tool names a target. */
+  remember?: boolean;
 }
 
 export type BridgeEvent =
@@ -24,6 +26,12 @@ export type BridgeEvent =
   | { type: "confirm"; request: ConfirmRequest }
   | { type: "final"; text: string }
   | { type: "error"; message: string };
+
+/** What the Memory section of the settings panel shows: counts, never text. */
+export interface MemoryView {
+  facts: number;
+  approvals: number;
+}
 
 export interface ChatLine {
   id: string;
