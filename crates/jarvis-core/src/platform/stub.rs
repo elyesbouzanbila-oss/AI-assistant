@@ -34,6 +34,8 @@ impl Platform for UnsupportedPlatform {
     unsupported_method!(focus_window, target: &'a str);
     unsupported_method!(type_text, text: &'a str);
     unsupported_method!(press_keys, combo: &'a str);
+    unsupported_method!(scroll, clicks: i32, position: Option<(i32, i32)>);
+    unsupported_method!(set_clipboard, text: &'a str);
 
     fn list_windows(&self) -> PlatformFuture<'_> {
         Box::pin(async { Err(unsupported()) })
@@ -44,6 +46,10 @@ impl Platform for UnsupportedPlatform {
     }
 
     fn screenshot(&self) -> PlatformFuture<'_> {
+        Box::pin(async { Err(unsupported()) })
+    }
+
+    fn get_clipboard(&self) -> PlatformFuture<'_> {
         Box::pin(async { Err(unsupported()) })
     }
 }

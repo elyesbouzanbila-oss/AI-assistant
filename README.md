@@ -173,12 +173,18 @@ panel under Voice.
 | `click` | Absolute screen coordinates (physical pixels) |
 | `screenshot` | Whole virtual desktop, downscaled to 1400 px JPEG before it goes to the model |
 | `read_file` / `write_file` | Jailed to `~/Jarvis/workspace` |
+| `wait` | Fixed delay, or waits until a window title appears |
+| `scroll` | Wheel notches at the pointer (or given coordinates) |
+| `list_files` | One level of the workspace, jailed like the file tools |
+| `clipboard_get` / `clipboard_set` | Clipboard text; reading needs an Allow chip |
 | `system_info` | OS, backend, workspace |
 
 ## Safety model
 
 - **Read-only tools** (screenshot, list windows, read file) run freely.
 - **Changing tools** need an explicit Allow in the island.
+- **Clipboard reads** need an Allow too: the clipboard is where password managers and
+  copy-password buttons put things, and the text would otherwise go to the model unasked.
 - **Blocked outright**: password managers, wallets, banking (by name), anything outside the
   workspace, and any unknown tool. An agent that reads your screen can be steered by what it
   reads, so it never gets near credentials.

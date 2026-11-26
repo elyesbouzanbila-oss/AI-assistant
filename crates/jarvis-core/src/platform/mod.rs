@@ -36,6 +36,13 @@ pub trait Platform: Send + Sync {
     fn click(&self, x: i32, y: i32) -> PlatformFuture<'_>;
     /// Full-screen capture, returned as a `data:image/jpeg;base64,...` URL.
     fn screenshot(&self) -> PlatformFuture<'_>;
+    /// Wheel notches at the pointer, positive = down. Moves the cursor first
+    /// when a position is given, because the wheel goes wherever it points.
+    fn scroll(&self, clicks: i32, position: Option<(i32, i32)>) -> PlatformFuture<'_>;
+    /// Text on the clipboard; empty when there is nothing on it.
+    fn get_clipboard(&self) -> PlatformFuture<'_>;
+    /// Replace the clipboard with `text`.
+    fn set_clipboard<'a>(&'a self, text: &'a str) -> PlatformFuture<'a>;
 }
 
 pub fn current() -> Arc<dyn Platform> {
