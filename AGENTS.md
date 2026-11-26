@@ -50,6 +50,9 @@ without mutating the real environment; keep that seam.
 | `JARVIS_MODEL` | `gpt-4o-mini` | must support tool calling **and** image input |
 | `JARVIS_MAX_STEPS` | `8` | clamped to 1..=24 |
 | `JARVIS_SITE_URL` | unset | OpenRouter attribution only, never sent elsewhere |
+| `JARVIS_STT_PROVIDER` | `model` | `model`, `windows` (SAPI) or `whisper` (whisper.cpp in WSL) |
+| `JARVIS_WHISPER_BIN` | `whisper-cli` | command or Linux path to whisper-cli inside WSL |
+| `JARVIS_WHISPER_MODEL` | — | required with the `whisper` provider; Linux path to a GGUF model |
 | `JARVIS_STT_MODEL` | `JARVIS_MODEL` | voice; must accept audio input |
 | `JARVIS_STT_BASE_URL` | `JARVIS_BASE_URL` | separate voice endpoint |
 | `JARVIS_STT_API_KEY` | — | required when `JARVIS_STT_BASE_URL` differs |
@@ -77,6 +80,10 @@ Resolution rules that are easy to break:
   again once. It never retries after a delta has reached the island, because streamed
   text cannot be unsaid; that case reports the primary error instead. Do not turn this
   into a retry loop: a dead endpoint plus a dead fallback must fail in seconds.
+  A loopback *primary* also gets one wake-and-retry (`with_primary_wake`), since there
+  is no fallback to trigger the hook; a remote primary never does. Build the agent with
+  that same configured client via `Agent::new`: a second `LlmClient` created inside the
+  shell would silently lose the fallback and wake hook for every turn.
 - **Only loopback fallbacks are started.** `ollama::ensure` parses the endpoint, refuses
   anything that is not `localhost` / `127.0.0.1` / `::1`, and validates the model name
   before interpolating it into the `wsl.exe` command — the same rule as `JARVIS_ARG`:
@@ -87,9 +94,20 @@ Resolution rules that are easy to break:
   in environment variables and the script arrives on `-Command -` stdin, so an answer cannot
   become PowerShell. Only unedited dictated prompts are spoken, editing the transcript makes
   it a typed turn, and a speech failure is silence, never `Phase::Error`.
+
+- **Stopping the microphone sends an empty-composer transcript.**
+  `finishDictation` hands it to the same `sendTurn` the composer form uses, so a dictated
+  turn is one action and its answer is spoken. With a half-typed draft it only appends and
+  waits for Send; Esc, closing the island and `keep === false` still drop the audio.
 - **Chat and voice are separate `Target`s** in `LlmClient`, both routed through one
   `request()`. Voice sends the WAV as an `input_audio` chat part, not to
   `/audio/transcriptions` — so a Whisper-only service will not work by setting a URL.
+  `JARVIS_STT_PROVIDER=windows` bypasses that target entirely: `platform/transcribe.rs`
+  stages the WAV and runs `System.Speech` in a hidden PowerShell. `whisper` stages the
+  same WAV, translates its path to `/mnt/c/...`, and calls `wsl.exe -e whisper-cli ...`
+  with Linux paths — no shell, no model output interpolated into a command. Both paths
+  return plain text, so the agent never sees audio and the text model always answers
+  the turn.
 - OpenRouter attribution headers are added only when the base URL host is
   `openrouter.ai`; no other endpoint may receive `HTTP-Referer`.
 - **A stored key never travels back to the webview.** `SettingsView` carries

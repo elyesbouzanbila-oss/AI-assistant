@@ -4,6 +4,43 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// Where dictation audio is turned into text. The text model answers the turn
+/// either way; this only chooses who produces the transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SttProvider {
+    /// Send the WAV to the configured audio-capable model.
+    Model,
+    /// Recognise it on this machine with the Windows speech engine.
+    Windows,
+    /// Recognise it locally with whisper.cpp, started as a child process.
+    Whisper,
+}
+
+impl SttProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Windows => "windows",
+            Self::Whisper => "whisper",
+        }
+    }
+
+    fn from_value(value: Option<String>) -> Self {
+        match value
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("windows") => Self::Windows,
+            Some("whisper") => Self::Whisper,
+            // An unset or unrecognised value keeps the existing behaviour: a
+            // silent switch to local recognition would be surprising.
+            _ => Self::Model,
+        }
+    }
+}
+
 /// Runtime configuration, resolved at startup from the environment and from
 /// `~/Jarvis/settings.json` (written by the island's settings panel).
 ///
@@ -21,6 +58,12 @@ pub struct Config {
     pub workspace: PathBuf,
     /// Optional `JARVIS_SITE_URL`, sent as `HTTP-Referer` to OpenRouter only.
     pub site_url: Option<String>,
+    /// `JARVIS_STT_PROVIDER`: `model` (default), `windows` or `whisper`.
+    pub stt_provider: SttProvider,
+    /// `JARVIS_WHISPER_BIN`: whisper-cli command or Linux path inside WSL.
+    pub whisper_bin: Option<String>,
+    /// `JARVIS_WHISPER_MODEL`: Linux path to a GGUF model inside WSL.
+    pub whisper_model: Option<String>,
     /// Optional `JARVIS_STT_MODEL`: transcribes voice when the main model
     /// cannot take audio. Falls back to `model` when unset.
     pub stt_model: Option<String>,
@@ -78,6 +121,9 @@ impl Config {
             max_steps: resolved.max_steps,
             workspace,
             site_url: resolved.site_url,
+            stt_provider: resolved.stt_provider,
+            whisper_bin: resolved.whisper_bin,
+            whisper_model: resolved.whisper_model,
             stt_model: resolved.stt_model,
             stt_base_url: resolved.stt_base_url,
             stt_api_key: resolved.stt_api_key,
@@ -107,6 +153,9 @@ impl Config {
             max_steps: 8,
             workspace: workspace.into(),
             site_url: None,
+            stt_provider: SttProvider::Model,
+            whisper_bin: None,
+            whisper_model: None,
             stt_model: None,
             stt_base_url: None,
             stt_api_key: None,
@@ -154,6 +203,25 @@ impl Config {
         format!("{}/chat/completions", self.transcription_base_url())
     }
 
+    /// whisper-cli as seen from inside WSL: a command on PATH or a Linux path.
+    pub fn whisper_binary(&self) -> String {
+        self.whisper_bin
+            .clone()
+            .unwrap_or_else(|| "whisper-cli".to_string())
+    }
+
+    /// The model path must be a real Linux path: wsl.exe passes arguments
+    /// without a shell, so `~` would never be expanded.
+    pub fn whisper_model_path(&self) -> Result<String> {
+        match &self.whisper_model {
+            Some(path) if !path.trim().is_empty() => Ok(path.trim().to_string()),
+            _ => anyhow::bail!(
+                "no Whisper model configured. Set JARVIS_WHISPER_MODEL to the Linux path \
+                 of a GGUF model inside WSL, e.g. /home/Chief/whisper.cpp/models/ggml-small.en.bin"
+            ),
+        }
+    }
+
     /// OpenRouter speaks the same protocol as OpenAI but wants a `provider/model`
     /// id and accepts attribution headers. Everything else is a plain
     /// OpenAI-compatible endpoint and must receive no OpenRouter headers.
@@ -192,7 +260,13 @@ impl Config {
                 );
             }
         }
-        if self.transcription_key().trim().is_empty() && !is_loopback(self.transcription_base_url())
+        if self.stt_provider == SttProvider::Whisper {
+            self.whisper_model_path()?;
+        }
+        // Local recognition needs no voice endpoint or key at all.
+        if self.stt_provider == SttProvider::Model
+            && self.transcription_key().trim().is_empty()
+            && !is_loopback(self.transcription_base_url())
         {
             anyhow::bail!(
                 "voice transcription points at {} but has no key. Add a voice key in Settings \
@@ -244,6 +318,9 @@ pub struct Settings {
     pub model: Option<String>,
     pub max_steps: Option<usize>,
     pub site_url: Option<String>,
+    pub stt_provider: Option<String>,
+    pub whisper_bin: Option<String>,
+    pub whisper_model: Option<String>,
     pub stt_model: Option<String>,
     pub stt_base_url: Option<String>,
     pub stt_api_key: Option<String>,
@@ -266,6 +343,9 @@ pub struct Resolved {
     pub model: String,
     pub max_steps: usize,
     pub site_url: Option<String>,
+    pub stt_provider: SttProvider,
+    pub whisper_bin: Option<String>,
+    pub whisper_model: Option<String>,
     pub stt_model: Option<String>,
     pub stt_base_url: Option<String>,
     pub stt_api_key: Option<String>,
@@ -278,12 +358,15 @@ pub struct Resolved {
 }
 
 /// Variables that override the settings file.
-pub const ENV_NAMES: [&str; 14] = [
+pub const ENV_NAMES: [&str; 17] = [
     "JARVIS_BASE_URL",
     "JARVIS_API_KEY",
     "JARVIS_MODEL",
     "JARVIS_MAX_STEPS",
     "JARVIS_SITE_URL",
+    "JARVIS_STT_PROVIDER",
+    "JARVIS_WHISPER_BIN",
+    "JARVIS_WHISPER_MODEL",
     "JARVIS_STT_MODEL",
     "JARVIS_STT_BASE_URL",
     "JARVIS_STT_API_KEY",
@@ -333,6 +416,12 @@ fn resolve_with(settings: &Settings, env: impl Fn(&str) -> Option<String>) -> Re
         .unwrap_or(8)
         .clamp(1, 24),
         site_url: value("JARVIS_SITE_URL", settings.site_url.clone()),
+        stt_provider: SttProvider::from_value(value(
+            "JARVIS_STT_PROVIDER",
+            settings.stt_provider.clone(),
+        )),
+        whisper_bin: value("JARVIS_WHISPER_BIN", settings.whisper_bin.clone()),
+        whisper_model: value("JARVIS_WHISPER_MODEL", settings.whisper_model.clone()),
         stt_model: value("JARVIS_STT_MODEL", settings.stt_model.clone()),
         stt_base_url: value("JARVIS_STT_BASE_URL", settings.stt_base_url.clone())
             .map(|value| value.trim_end_matches('/').to_string()),
@@ -612,6 +701,70 @@ mod tests {
         );
         assert_eq!(config.transcription_key(), "sk-or");
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn windows_transcription_needs_no_voice_endpoint_or_key() {
+        let mut config = Config::new("https://api.openai.com/v1", "sk-test", "m", "/tmp/ws");
+        config.stt_base_url = Some("https://elsewhere.test/v1".into());
+        assert!(config.validate().is_err(), "a remote voice endpoint needs a key");
+
+        config.stt_provider = SttProvider::Windows;
+        assert!(config.validate().is_ok(), "local recognition ignores voice settings");
+        assert_eq!(config.stt_provider.as_str(), "windows");
+    }
+
+    #[test]
+    fn stt_provider_resolves_with_precedence_and_a_safe_default() {
+        let settings = Settings {
+            stt_provider: Some("windows".into()),
+            ..Settings::default()
+        };
+        assert_eq!(
+            resolve_with(&settings, |_| None).stt_provider,
+            SttProvider::Windows
+        );
+        assert_eq!(
+            resolve_with(&settings, |name| {
+                (name == "JARVIS_STT_PROVIDER").then(|| "model".to_string())
+            })
+            .stt_provider,
+            SttProvider::Model,
+            "the environment wins over the saved file"
+        );
+        assert_eq!(
+            resolve_with(&Settings::default(), |_| None).stt_provider,
+            SttProvider::Model
+        );
+        assert_eq!(
+            SttProvider::from_value(Some("nonsense".into())),
+            SttProvider::Model,
+            "an odd value must not silently change providers"
+        );
+    }
+
+    #[test]
+    fn whisper_provider_uses_the_wsl_paths() {
+        let settings = Settings {
+            stt_provider: Some("whisper".into()),
+            whisper_bin: Some("/home/Chief/whisper.cpp/build/bin/whisper-cli".into()),
+            whisper_model: Some("/home/Chief/whisper.cpp/models/ggml-small.en.bin".into()),
+            ..Settings::default()
+        };
+        let resolved = resolve_with(&settings, |_| None);
+        assert_eq!(resolved.stt_provider, SttProvider::Whisper);
+
+        let mut config = Config::new("http://localhost:11434/v1", "", "m", "/tmp/ws");
+        config.stt_provider = SttProvider::Whisper;
+        assert!(config.validate().is_err(), "a model path is required");
+        config.whisper_bin = resolved.whisper_bin.clone();
+        config.whisper_model = resolved.whisper_model.clone();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.whisper_binary(), "/home/Chief/whisper.cpp/build/bin/whisper-cli");
+        assert_eq!(
+            config.whisper_model_path().unwrap(),
+            "/home/Chief/whisper.cpp/models/ggml-small.en.bin"
+        );
     }
 
     #[test]

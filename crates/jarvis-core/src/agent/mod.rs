@@ -107,17 +107,6 @@ impl Agent {
         }
     }
 
-    /// Build the default agent: real model, real platform.
-    pub fn from_config(
-        config: Config,
-        platform: Arc<dyn Platform>,
-        audit: Audit,
-        emit: Emitter,
-    ) -> Self {
-        let llm = Arc::new(LlmClient::new(&config));
-        Self::new(config, platform, llm, audit, emit)
-    }
-
     pub fn with_confirm_timeout(mut self, timeout: Duration) -> Self {
         self.confirm_timeout = timeout;
         self

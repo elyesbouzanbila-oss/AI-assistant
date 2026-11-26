@@ -406,6 +406,11 @@ body.live .island {
   color: var(--danger);
 }
 
+/* A status line, not a failure. */
+.voice-note.busy {
+  color: var(--muted);
+}
+
 /* --------------------------------------------------------------- working */
 
 .working {
@@ -661,7 +666,8 @@ body.live .island {
   border: 1px solid rgba(250, 189, 47, 0.32);
 }
 
-.field input {
+.field input,
+.field select {
   -webkit-app-region: no-drag;
   height: 32px;
   min-width: 0;
@@ -680,12 +686,19 @@ body.live .island {
   opacity: 0.75;
 }
 
-.field input:focus {
+.field select option {
+  color: var(--text);
+  background: var(--bg0);
+}
+
+.field input:focus,
+.field select:focus {
   border-color: rgba(250, 189, 47, 0.5);
   box-shadow: 0 0 0 3px rgba(250, 189, 47, 0.1);
 }
 
-.field input:disabled {
+.field input:disabled,
+.field select:disabled {
   color: var(--muted);
   border-style: dashed;
   cursor: not-allowed;

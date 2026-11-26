@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use jarvis_core::agent::{Agent, AgentEvent, Emitter, Phase};
 use jarvis_core::audit::Audit;
-use jarvis_core::config::{self, Config};
+use jarvis_core::config::{self, Config, SttProvider};
 use jarvis_core::llm::LlmClient;
 use jarvis_core::platform;
 use jarvis_core::platform::recorder::Recorder;
@@ -81,6 +81,10 @@ struct Runtime {
     agent: Option<Arc<Agent>>,
     /// Shares the agent's endpoint and key; used only for voice transcription.
     llm: Option<Arc<LlmClient>>,
+    /// Where dictation audio is transcribed; read by `stop_dictation`.
+    stt_provider: SttProvider,
+    /// whisper-cli command and Linux model path inside WSL.
+    whisper: Option<(String, String)>,
     /// Set when the configuration was rejected, e.g. a missing API key.
     startup_error: Option<String>,
 }
@@ -95,19 +99,55 @@ impl Runtime {
                     .map(Audit::new)
                     .unwrap_or_else(|_| Audit::disabled());
                 let mut client = LlmClient::new(&config);
-                if let Some(fallback) = config.fallback() {
+                let fallback = config.fallback();
+                if let Some(fallback) = &fallback {
                     tracing::info!("falling back to {} at {}", fallback.model, fallback.base_url);
-                    let endpoint = fallback.base_url.clone();
-                    let model = fallback.model.clone();
-                    client = client.with_fallback(&fallback).with_wake(Arc::new(move || {
-                        ollama::ensure(&endpoint, &model);
-                    }));
+                    client = client.with_fallback(fallback);
                 }
+
+                // Wake whichever loopback endpoint can answer. A local primary
+                // needs this too: without a fallback there is no other retry.
+                let (wake_endpoint, wake_model, wake_primary) = if config.is_local() {
+                    (config.base_url.clone(), config.model.clone(), true)
+                } else if let Some(fallback) = &fallback {
+                    (fallback.base_url.clone(), fallback.model.clone(), false)
+                } else {
+                    (String::new(), String::new(), false)
+                };
+                if !wake_endpoint.is_empty() {
+                    let wake = Arc::new(move || ollama::ensure(&wake_endpoint, &wake_model));
+                    client = if wake_primary {
+                        client.with_primary_wake(wake)
+                    } else {
+                        client.with_wake(wake)
+                    };
+                }
+
+                // The agent must use this same client: it is the one carrying
+                // the fallback and wake hook. Building another one here would
+                // silently drop both for every conversation turn.
                 let llm = Arc::new(client);
-                let agent = Agent::from_config(config, platform::current(), audit, emit.clone());
+                let stt_provider = config.stt_provider;
+                let whisper = if stt_provider == SttProvider::Whisper {
+                    config
+                        .whisper_model_path()
+                        .ok()
+                        .map(|model| (config.whisper_binary(), model))
+                } else {
+                    None
+                };
+                let agent = Agent::new(
+                    config,
+                    platform::current(),
+                    llm.clone(),
+                    audit,
+                    emit.clone(),
+                );
                 Self {
                     agent: Some(Arc::new(agent)),
                     llm: Some(llm),
+                    stt_provider,
+                    whisper,
                     startup_error: None,
                 }
             }
@@ -117,6 +157,8 @@ impl Runtime {
                 Self {
                     agent: None,
                     llm: None,
+                    stt_provider: SttProvider::Model,
+                    whisper: None,
                     startup_error: Some(message),
                 }
             }
@@ -243,7 +285,7 @@ async fn start_dictation(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 /// Stop recording and return the transcript. Errors are shown in the island,
-/// so the user learns why (no mic, model without audio input, silence).
+/// so the user learns why (no mic, a recogniser that cannot hear, silence).
 #[tauri::command]
 async fn stop_dictation(state: State<'_, AppState>) -> Result<String, String> {
     let recorder = state.recorder.lock().await.take();
@@ -259,13 +301,30 @@ async fn stop_dictation(state: State<'_, AppState>) -> Result<String, String> {
         return Err("that was too short to hear anything".to_string());
     }
 
-    let llm = state.runtime().llm.clone();
-    let Some(llm) = llm else {
-        return Err(NOT_CONFIGURED.to_string());
+    // Both paths return plain text: the text model answers the turn either way.
+    let provider = state.runtime().stt_provider;
+    let transcript = match provider {
+        SttProvider::Windows => {
+            jarvis_core::platform::transcribe::transcribe_wav(&wav).await
+        }
+        SttProvider::Whisper => {
+            let Some((binary, model)) = state.runtime().whisper.clone() else {
+                return Err(NOT_CONFIGURED.to_string());
+            };
+            jarvis_core::platform::transcribe::transcribe_with_whisper(
+                &wav, &binary, &model,
+            )
+            .await
+        }
+        SttProvider::Model => {
+            let llm = state.runtime().llm.clone();
+            let Some(llm) = llm else {
+                return Err(NOT_CONFIGURED.to_string());
+            };
+            llm.transcribe(&wav).await
+        }
     };
-    llm.transcribe(&wav)
-        .await
-        .map_err(|error| format!("{error:#}"))
+    transcript.map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]
@@ -284,6 +343,9 @@ struct SettingsView {
     base_url: String,
     model: String,
     max_steps: usize,
+    stt_provider: String,
+    whisper_bin: String,
+    whisper_model: String,
     stt_model: String,
     stt_base_url: String,
     fallback_base_url: String,
@@ -308,6 +370,12 @@ struct SettingsDraft {
     model: String,
     #[serde(default = "default_steps")]
     max_steps: u32,
+    #[serde(default = "default_stt_provider")]
+    stt_provider: String,
+    #[serde(default)]
+    whisper_bin: String,
+    #[serde(default)]
+    whisper_model: String,
     #[serde(default)]
     stt_model: String,
     #[serde(default)]
@@ -339,6 +407,10 @@ fn default_speak() -> bool {
     true
 }
 
+fn default_stt_provider() -> String {
+    "model".to_string()
+}
+
 /// Result of the panel's "test" button: no tokens are spent, so it is safe to
 /// press repeatedly.
 #[derive(serde::Serialize)]
@@ -366,6 +438,9 @@ fn settings_view(error: Option<String>) -> Result<SettingsView, String> {
         base_url: resolved.base_url,
         model: resolved.model,
         max_steps: resolved.max_steps,
+        stt_provider: resolved.stt_provider.as_str().to_string(),
+        whisper_bin: resolved.whisper_bin.unwrap_or_default(),
+        whisper_model: resolved.whisper_model.unwrap_or_default(),
         stt_model: resolved.stt_model.unwrap_or_default(),
         stt_base_url: resolved.stt_base_url.unwrap_or_default(),
         fallback_base_url: resolved.fallback_base_url.unwrap_or_default(),
@@ -423,6 +498,9 @@ fn save_settings(state: State<'_, AppState>, draft: SettingsDraft) -> Result<Set
     settings.base_url = non_empty(&draft.base_url);
     settings.model = non_empty(&draft.model);
     settings.max_steps = Some(draft.max_steps.clamp(1, 24) as usize);
+    settings.stt_provider = non_empty(&draft.stt_provider);
+    settings.whisper_bin = non_empty(&draft.whisper_bin);
+    settings.whisper_model = non_empty(&draft.whisper_model);
     settings.stt_model = non_empty(&draft.stt_model);
     settings.stt_base_url = non_empty(&draft.stt_base_url);
     settings.fallback_base_url = non_empty(&draft.fallback_base_url);

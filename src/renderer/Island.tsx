@@ -23,6 +23,10 @@ import type {
 } from "./lib/types";
 
 const COLLAPSE_MS = 2600;
+/** A resize makes the webview emit leave/enter events that are not real hover changes. */
+const HOVER_SETTLE_MS = 220;
+/** Absorbs a single synthetic leave without making the island flicker. */
+const CLOSE_DELAY_MS = 120;
 /** Matches `MAX_SECONDS` in crates/jarvis-core/src/platform/recorder.rs. */
 const DICTATION_MAX_MS = 30_000;
 
@@ -70,6 +74,7 @@ export function Island() {
   const [notice, setNotice] = useState("");
   const [dictating, setDictating] = useState(false);
   const [voiceNote, setVoiceNote] = useState("");
+  const [transcribing, setTranscribing] = useState(false);
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [form, setForm] = useState<SettingsDraft | null>(null);
   const [settingsNote, setSettingsNote] = useState("");
@@ -89,6 +94,24 @@ export function Island() {
   const dictatingRef = useRef(false);
   /** The transcript dictation produced, while the composer still matches it. */
   const dictatedRef = useRef<string | null>(null);
+  /** Mirrors `draft` so an async callback reads the current text, not a stale render. */
+  const draftRef = useRef("")
+  const closeTimer = useRef<number | null>(null);
+  const openTimer = useRef<number | null>(null);
+  const pointerInside = useRef(false);
+  /** Hover events are unreliable for a moment after a window resize. */
+  const hoverGuard = useRef(0);
+
+  const clearClose = useCallback(() => {
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    if (openTimer.current !== null) {
+      window.clearTimeout(openTimer.current);
+      openTimer.current = null;
+    }
+  }, []);
 
   const clearCollapse = () => {
     if (collapseTimer.current !== null) {
@@ -125,6 +148,9 @@ export function Island() {
         baseUrl: view.baseUrl,
         model: view.model,
         maxSteps: view.maxSteps,
+        sttProvider: view.sttProvider,
+        whisperBin: view.whisperBin,
+        whisperModel: view.whisperModel,
         sttModel: view.sttModel,
         sttBaseUrl: view.sttBaseUrl,
         fallbackBaseUrl: view.fallbackBaseUrl,
@@ -147,6 +173,26 @@ export function Island() {
     setDictating(on);
   };
 
+  const writeDraft = (value: string) => {
+    draftRef.current = value;
+    setDraft(value);
+  };
+
+  /** Hand a prompt to the agent. `byVoice` makes the answer spoken. */
+  const sendTurn = (text: string, byVoice: boolean) => {
+    const prompt = text.trim();
+    if (!prompt) return;
+    dictatedRef.current = null;
+    setLines((prev) => [
+      ...prev,
+      { id: `u-${Date.now()}`, role: "user", text: prompt },
+    ]);
+    writeDraft("");
+    setNotice("");
+    streamingId.current = null;
+    void ask(prompt, byVoice);
+  };
+
   const beginDictation = useCallback(async () => {
     if (dictatingRef.current) return;
     setVoiceNote("");
@@ -162,18 +208,26 @@ export function Island() {
   const finishDictation = useCallback(async (keep: boolean) => {
     if (!dictatingRef.current) return;
     setRecording(false);
+    // The WAV is transcribed on stop, so name what the wait is for.
+    setTranscribing(true);
     try {
       const text = (await stopDictation()).trim();
       if (!keep || !text) return;
-      setDraft((prev) => {
-        // A prompt that is still exactly this transcript counts as spoken.
-        // Appending it to a half-typed draft does not, so that turn stays silent.
-        dictatedRef.current = prev.trim() ? null : text;
-        return prev.trim() ? `${prev.trim()} ${text}` : text;
-      });
+      // An empty composer makes dictation one action: stopping the mic sends
+      // the transcript, and the answer is spoken because the turn began by
+      // voice. A half-typed draft is never sent by surprise: the transcript
+      // is appended and waits for Send.
+      if (!draftRef.current.trim()) {
+        sendTurn(text, true);
+        return;
+      }
+      dictatedRef.current = null;
+      writeDraft(`${draftRef.current.trim()} ${text}`);
       window.requestAnimationFrame(() => inputRef.current?.focus());
     } catch (error) {
       setVoiceNote(String(error));
+    } finally {
+      setTranscribing(false);
     }
   }, []);
 
@@ -187,6 +241,8 @@ export function Island() {
       switch (event.type) {
         case "phase":
           clearCollapse();
+          clearClose();
+          hoverGuard.current = Date.now() + HOVER_SETTLE_MS;
           setPhase(event.phase);
           if (event.label) setLabel(event.label);
           break;
@@ -246,13 +302,15 @@ export function Island() {
           break;
       }
     },
-    [collapse, beginDictation, finishDictation],
+    [collapse, clearClose, beginDictation, finishDictation],
   );
 
   useEffect(() => {
     document.body.className = isLive ? "live" : "demo";
     return subscribe(handleEvent);
   }, [handleEvent]);
+
+  useEffect(() => clearClose, [clearClose]);
 
   useEffect(() => {
     if (phase === "open") {
@@ -297,11 +355,15 @@ export function Island() {
 
   const open = () => {
     clearCollapse();
+    clearClose();
+    hoverGuard.current = Date.now() + HOVER_SETTLE_MS;
     setPhase("open");
     void pushPhase("open");
   };
 
   const close = () => {
+    clearClose();
+    hoverGuard.current = Date.now() + HOVER_SETTLE_MS;
     void pushPhase("idle");
     collapse();
   };
@@ -310,15 +372,7 @@ export function Island() {
     const text = draft.trim();
     if (!text) return;
     const byVoice = dictatedRef.current !== null && dictatedRef.current === text;
-    dictatedRef.current = null;
-    setLines((prev) => [
-      ...prev,
-      { id: `u-${Date.now()}`, role: "user", text },
-    ]);
-    setDraft("");
-    setNotice("");
-    streamingId.current = null;
-    void ask(text, byVoice);
+    sendTurn(text, byVoice);
   };
 
   const edit = (patch: Partial<SettingsDraft>) => {
@@ -388,6 +442,9 @@ export function Island() {
       form.baseUrl !== settings.baseUrl ||
       form.model !== settings.model ||
       form.maxSteps !== settings.maxSteps ||
+      form.sttProvider !== settings.sttProvider ||
+      form.whisperBin !== settings.whisperBin ||
+      form.whisperModel !== settings.whisperModel ||
       form.sttModel !== settings.sttModel ||
       form.sttBaseUrl !== settings.sttBaseUrl ||
       form.fallbackBaseUrl !== settings.fallbackBaseUrl ||
@@ -413,10 +470,37 @@ export function Island() {
         className="island"
         data-phase={phase}
         onMouseEnter={() => {
-          if (phase === "idle") open();
+          pointerInside.current = true;
+          clearClose();
+          if (phase !== "idle") return;
+          const wait = hoverGuard.current - Date.now();
+          if (wait <= 0) {
+            open();
+          } else {
+            // The pointer may still be here when the resize settles.
+            openTimer.current = window.setTimeout(() => {
+              openTimer.current = null;
+              if (pointerInside.current) open();
+            }, wait);
+          }
         }}
         onMouseLeave={() => {
-          if (phase === "open" && !draft.trim()) close();
+          pointerInside.current = false;
+          if (openTimer.current !== null) {
+            window.clearTimeout(openTimer.current);
+            openTimer.current = null;
+          }
+          if (
+            phase !== "open" ||
+            draft.trim() ||
+            Date.now() < hoverGuard.current
+          ) {
+            return;
+          }
+          closeTimer.current = window.setTimeout(() => {
+            closeTimer.current = null;
+            close();
+          }, CLOSE_DELAY_MS);
         }}
       >
         <header className="bar" onClick={() => phase === "idle" && open()}>
@@ -555,6 +639,46 @@ export function Island() {
 
               <div className="settings-section">
                 Voice <span>optional</span>
+              </div>
+
+              <Field
+                label="Transcription"
+                locked={envLocked("JARVIS_STT_PROVIDER")}
+              >
+                <select
+                  value={form?.sttProvider ?? "model"}
+                  onChange={(event) =>
+                    edit({ sttProvider: event.target.value })
+                  }
+                  disabled={envLocked("JARVIS_STT_PROVIDER")}
+                >
+                  <option value="model">Voice model (audio input)</option>
+                  <option value="windows">Windows speech recognition</option>
+                  <option value="whisper">Whisper in WSL (local)</option>
+                </select>
+              </Field>
+
+              <div className="field-row voice">
+                <Field label="Whisper command" locked={envLocked("JARVIS_WHISPER_BIN")}>
+                  <input
+                    value={form?.whisperBin ?? ""}
+                    onChange={(event) => edit({ whisperBin: event.target.value })}
+                    placeholder="whisper-cli"
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={envLocked("JARVIS_WHISPER_BIN")}
+                  />
+                </Field>
+                <Field label="Whisper model" locked={envLocked("JARVIS_WHISPER_MODEL")}>
+                  <input
+                    value={form?.whisperModel ?? ""}
+                    onChange={(event) => edit({ whisperModel: event.target.value })}
+                    placeholder="Linux path inside WSL"
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={envLocked("JARVIS_WHISPER_MODEL")}
+                  />
+                </Field>
               </div>
 
               <div className="field-row voice">
@@ -753,7 +877,7 @@ export function Island() {
                     </p>
                     <div className="chips">
                       {SUGGESTIONS.map((s) => (
-                        <button key={s} onClick={() => setDraft(s)}>
+                        <button key={s} onClick={() => writeDraft(s)}>
                           {s}
                         </button>
                       ))}
@@ -767,7 +891,11 @@ export function Island() {
                   ))
                 )}
               </div>
-              {voiceNote && <div className="voice-note">{voiceNote}</div>}
+              {(voiceNote || transcribing) && (
+                <div className={`voice-note${transcribing ? " busy" : ""}`}>
+                  {transcribing ? "Transcribing…" : voiceNote}
+                </div>
+              )}
               <form
                 className="composer"
                 onSubmit={(event) => {
@@ -779,6 +907,7 @@ export function Island() {
                   type="button"
                   className={`mic${dictating ? " recording" : ""}`}
                   onClick={() => void toggleDictation()}
+                  disabled={transcribing}
                   aria-label={dictating ? "Stop dictation" : "Start dictation"}
                   title={
                     dictating ? "Stop dictation" : "Dictate (Ctrl+Shift+Space)"
@@ -792,7 +921,7 @@ export function Island() {
                   onChange={(event) => {
                     // Editing the transcript makes it a typed turn.
                     dictatedRef.current = null;
-                    setDraft(event.target.value);
+                    writeDraft(event.target.value);
                   }}
                   placeholder={
                     dictating
@@ -802,7 +931,12 @@ export function Island() {
                   spellCheck={false}
                   autoComplete="off"
                 />
-                <button type="submit" className="send" aria-label="Send">
+                <button
+                  type="submit"
+                  className="send"
+                  aria-label="Send"
+                  disabled={transcribing}
+                >
                   &#8593;
                 </button>
               </form>
