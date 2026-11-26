@@ -23,6 +23,7 @@ Everything that touches the OS sits behind the `Platform` trait
 | Env/settings.json parsing, validation, key resolution | `crates/jarvis-core/src/config.rs` |
 | Request shape, streaming, transcription | `crates/jarvis-core/src/llm.rs` |
 | Tool schemas, execution, chip summaries | `crates/jarvis-core/src/tools/mod.rs` |
+| Transcript, facts, remembered approvals | `crates/jarvis-core/src/memory.rs` |
 | Approval rules, blocked apps | `crates/jarvis-core/src/policy.rs` |
 | OS behaviour (Windows) | `platform/{win,recorder,input,combo}.rs` |
 | Starting the local fallback (WSL + Ollama) | `src-tauri/src/ollama.rs` |
@@ -163,6 +164,14 @@ actual executable is the deliverable.
   `clipboard_get` is the one safe-looking read that still needs an Allow: password
   managers put secrets on the clipboard, and the text goes to the model.
   `clipboard_set` needs none, and its text travels in `JARVIS_ARG` like everything else.
+- Memory (`memory.rs`) is plain text under `jarvis_dir()`, and every read of a missing
+  or corrupt file is empty rather than an error: memory must never fail a turn. The
+  transcript stores **text only**; never replay stored tool calls, images or results to
+  a provider. Keep the caps (`TRANSCRIPT_TURNS`, `REPLAYED_MESSAGES`, `FACT_CHARS`,
+  `FACTS_INJECTED_CHARS`).
+- Remembered approvals are limited to `REMEMBERABLE` (`open_app`, `close_app`,
+  `focus_window`). One may skip the chip for a `Confirm` verdict and must never lift a
+  `Blocked` one; log it as `allowed by memory`.
 - **Waiting beats guessing.** `wait` has a fixed-delay mode and a window-title mode
   that polls `list_windows`; the prompt tells the model to prefer the latter after
   opening an app. Do not fold the delay into `open_app` instead.

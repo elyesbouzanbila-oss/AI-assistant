@@ -14,6 +14,7 @@ use jarvis_core::agent::{Agent, AgentEvent, Emitter, Phase};
 use jarvis_core::audit::Audit;
 use jarvis_core::config::{self, Config, SttProvider};
 use jarvis_core::llm::LlmClient;
+use jarvis_core::memory::{Forget, Memory, Role};
 use jarvis_core::platform;
 use jarvis_core::platform::recorder::Recorder;
 use tauri::{AppHandle, Emitter as _, Manager, State, WebviewWindow};
@@ -75,6 +76,9 @@ struct AppState {
     emit: Emitter,
     /// Whether the current turn was dictated, and how to speak it.
     voice: VoiceState,
+    /// Transcript, facts and approvals. Lives here, not in the runtime, so a
+    /// settings save cannot forget the conversation.
+    memory: Memory,
 }
 
 struct Runtime {
@@ -90,7 +94,7 @@ struct Runtime {
 }
 
 impl Runtime {
-    fn build(emit: &Emitter, voice: &VoiceState) -> Self {
+    fn build(emit: &Emitter, voice: &VoiceState, memory: &Memory) -> Self {
         match Config::load() {
             Ok(config) => {
                 tracing::info!("starting with {}", config.describe());
@@ -142,6 +146,7 @@ impl Runtime {
                     llm.clone(),
                     audit,
                     emit.clone(),
+                    memory.clone(),
                 );
                 Self {
                     agent: Some(Arc::new(agent)),
@@ -247,9 +252,9 @@ async fn ask(
 }
 
 #[tauri::command]
-fn confirm(state: State<'_, AppState>, id: String, allow: bool) {
+fn confirm(state: State<'_, AppState>, id: String, allow: bool, remember: Option<bool>) {
     if let Some(agent) = state.runtime().agent.clone() {
-        agent.confirm(&id, allow);
+        agent.confirm(&id, allow, remember.unwrap_or(false));
     }
 }
 
@@ -260,6 +265,58 @@ fn cancel(state: State<'_, AppState>) {
     if let Some(agent) = state.runtime().agent.clone() {
         agent.cancel();
     }
+}
+
+/// One stored turn, as the island repaints it.
+#[derive(serde::Serialize)]
+struct TurnView {
+    role: &'static str,
+    text: String,
+}
+
+#[tauri::command]
+fn history(state: State<'_, AppState>) -> Vec<TurnView> {
+    state
+        .memory
+        .transcript()
+        .into_iter()
+        .map(|turn| TurnView {
+            role: match turn.role {
+                Role::User => "user",
+                Role::Assistant => "assistant",
+            },
+            text: turn.text,
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn forget_history(state: State<'_, AppState>) {
+    state.memory.forget(Forget::Conversation);
+    if let Some(agent) = state.runtime().agent.clone() {
+        // The model's copy goes too, or the next turn answers from it.
+        agent.clear_history();
+    }
+}
+
+/// Counts only: the panel never needs the text.
+#[derive(serde::Serialize)]
+struct MemoryView {
+    facts: usize,
+    approvals: usize,
+}
+
+#[tauri::command]
+fn memory_info(state: State<'_, AppState>) -> MemoryView {
+    MemoryView {
+        facts: state.memory.facts_count(),
+        approvals: state.memory.approvals().len(),
+    }
+}
+
+#[tauri::command]
+fn forget_approvals(state: State<'_, AppState>) {
+    state.memory.forget(Forget::Approvals);
 }
 
 #[tauri::command]
@@ -534,7 +591,7 @@ fn save_settings(state: State<'_, AppState>, draft: SettingsDraft) -> Result<Set
     config::save_settings(&settings).map_err(|error| format!("{error:#}"))?;
 
     let mut runtime = state.runtime();
-    *runtime = Runtime::build(&state.emit, &state.voice);
+    *runtime = Runtime::build(&state.emit, &state.voice, &state.memory);
     let error = runtime.startup_error.clone();
     drop(runtime);
 
@@ -611,7 +668,10 @@ pub fn run() {
                 })
             };
 
-            let runtime = Runtime::build(&emit, &voice);
+            let memory = config::jarvis_dir()
+                .map(Memory::new)
+                .unwrap_or_else(|_| Memory::new(std::env::temp_dir()));
+            let runtime = Runtime::build(&emit, &voice, &memory);
             let failure = runtime.startup_error.clone();
 
             app.manage(AppState {
@@ -619,6 +679,7 @@ pub fn run() {
                 recorder: tokio::sync::Mutex::new(None),
                 emit,
                 voice,
+                memory,
             });
 
             if let Some(window) = island_window(&handle) {
@@ -648,6 +709,10 @@ pub fn run() {
             ask,
             confirm,
             cancel,
+            history,
+            forget_history,
+            memory_info,
+            forget_approvals,
             ui_phase,
             start_dictation,
             stop_dictation,

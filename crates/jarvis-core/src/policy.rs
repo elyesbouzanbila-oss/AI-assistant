@@ -41,6 +41,7 @@ const SAFE: &[&str] = &[
     "wait",
     "list_files",
     "clipboard_set",
+    "remember",
 ];
 
 /// Tools that change something on the machine.
@@ -103,7 +104,7 @@ pub fn evaluate(tool: &str, args: &Value, workspace: &Path) -> Decision {
         return Decision::new(Verdict::Blocked, "path is outside the Jarvis workspace");
     }
 
-    if let Some(target) = target_name(tool, args) {
+    if let Some(target) = target(tool, args) {
         let lower = target.to_lowercase();
         if let Some(hit) = SENSITIVE.iter().find(|needle| lower.contains(*needle)) {
             return Decision::new(
@@ -120,8 +121,9 @@ pub fn evaluate(tool: &str, args: &Value, workspace: &Path) -> Decision {
     Decision::new(Verdict::Blocked, "unknown tool")
 }
 
-/// The app or window a tool would act on, if any.
-fn target_name<'a>(tool: &str, args: &'a Value) -> Option<&'a str> {
+/// The app or window a tool would act on, if any. Shared with the approval
+/// memory, so both agree on what an action is.
+pub fn target<'a>(tool: &str, args: &'a Value) -> Option<&'a str> {
     match tool {
         "open_app" => args.get("name").and_then(Value::as_str),
         "close_app" | "focus_window" => args

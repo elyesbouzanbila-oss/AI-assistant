@@ -4,8 +4,12 @@ import {
   ask,
   cancel,
   confirm,
+  forgetApprovals,
+  forgetHistory,
   getSettings,
+  history,
   isLive,
+  memoryInfo,
   saveSettings,
   testSettings,
   setPhase as pushPhase,
@@ -17,6 +21,7 @@ import type {
   BridgeEvent,
   ChatLine,
   ConfirmRequest,
+  MemoryView,
   Phase,
   SettingsDraft,
   SettingsView,
@@ -78,6 +83,7 @@ export function Island() {
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [form, setForm] = useState<SettingsDraft | null>(null);
   const [settingsNote, setSettingsNote] = useState("");
+  const [memory, setMemory] = useState<MemoryView | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(
@@ -313,6 +319,18 @@ export function Island() {
 
   useEffect(() => clearClose, [clearClose]);
 
+  // The conversation outlives the window: paint what Rust stored before the
+  // first new turn, and read the counts for the Memory section.
+  useEffect(() => {
+    if (!isLive) return;
+    void history()
+      .then((turns) => setLines(turns))
+      .catch(() => {});
+    void memoryInfo()
+      .then(setMemory)
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (phase === "open") {
       inputRef.current?.focus();
@@ -455,12 +473,26 @@ export function Island() {
       form.voice !== settings.voice ||
       form.speechRate !== settings.speechRate);
 
-  const decide = (allow: boolean) => {
+  const decide = (allow: boolean, remember = false) => {
     if (!pending) return;
-    void confirm(pending.id, allow);
+    void confirm(pending.id, allow, remember);
     setPending(null);
     setLabel(allow ? "Working" : "Cancelling");
     setPhase("working");
+  };
+
+  const forget = async (what: "history" | "approvals") => {
+    try {
+      if (what === "history") {
+        await forgetHistory();
+        setLines([]);
+      } else {
+        await forgetApprovals();
+      }
+      setMemory(await memoryInfo());
+    } catch (error) {
+      setSettingsNote(String(error));
+    }
   };
 
   const status =
@@ -844,6 +876,39 @@ export function Island() {
                 ))}
               </datalist>
 
+              <div className="settings-section">
+                Memory
+                <span>
+                  {memory
+                    ? `${memory.facts} facts · ${memory.approvals} remembered`
+                    : "kept on this machine"}
+                </span>
+              </div>
+
+              <div className="field-row voice">
+                <button
+                  type="button"
+                  className="deny"
+                  onClick={() => void forget("history")}
+                  title="Delete the stored conversation"
+                >
+                  Forget the conversation
+                </button>
+                <button
+                  type="button"
+                  className="deny"
+                  onClick={() => void forget("approvals")}
+                  title="Ask again for every app"
+                >
+                  Forget remembered permissions
+                </button>
+              </div>
+
+              <p className="field-note">
+                The transcript, the facts you told it and the approvals you
+                gave live in plain text under ~/Jarvis.
+              </p>
+
               <div className="settings-foot">
                 <button
                   type="button"
@@ -981,6 +1046,15 @@ export function Island() {
                 <button className="allow" onClick={() => decide(true)}>
                   Allow
                 </button>
+                {pending.remember && (
+                  <button
+                    className="allow"
+                    onClick={() => decide(true, true)}
+                    title="Approve this app from now on"
+                  >
+                    Always allow
+                  </button>
+                )}
                 <button className="deny" onClick={() => decide(false)}>
                   Deny
                 </button>

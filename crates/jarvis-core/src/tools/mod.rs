@@ -24,6 +24,8 @@ pub struct ToolContext {
     /// Whether the model can take an image. Off means the screenshot tool is
     /// neither offered nor executed: its result would end the turn.
     pub vision: bool,
+    /// Where `remember` writes its facts.
+    pub memory: crate::memory::Memory,
 }
 
 pub struct ToolOutcome {
@@ -176,6 +178,15 @@ pub fn schema_values(vision: bool) -> Vec<Value> {
             }),
         ),
         function(
+            "remember",
+            "Save one durable fact about the user (their name, a preference, how they like things done) to a file that is read into your instructions on every start. Use it when they tell you something worth keeping. Never store passwords, keys or anything they asked you to forget.",
+            json!({
+                "type": "object",
+                "properties": { "text": { "type": "string", "description": "One short sentence" } },
+                "required": ["text"]
+            }),
+        ),
+        function(
             "system_info",
             "Report the operating system, available capabilities and workspace path.",
             json!({ "type": "object", "properties": {} }),
@@ -209,6 +220,12 @@ pub fn summarise(name: &str, args: &Value) -> String {
         "list_windows" => "List open windows".to_string(),
         "press_keys" => format!("Press {}", str_arg(args, "combo")),
         "screenshot" => "Take a screenshot and look at it".to_string(),
+        "remember" => {
+            let text = str_arg(args, "text");
+            let preview: String = text.chars().take(60).collect();
+            let ellipsis = if text.chars().count() > 60 { "…" } else { "" };
+            format!("Remember \u{201c}{preview}{ellipsis}\u{201d}")
+        }
         "system_info" => "Check system information".to_string(),
         "type_text" => {
             let text = str_arg(args, "text");
@@ -489,6 +506,14 @@ pub async fn execute(name: &str, args: &Value, ctx: &ToolContext) -> Result<Tool
                 summarise(name, args),
             ))
         }
+        "remember" => {
+            let text = need_str(args, "text")?;
+            ctx.memory.remember(text)?;
+            Ok(done(
+                format!("remembered: {}", text.trim()),
+                summarise(name, args),
+            ))
+        }
         "system_info" => {
             let text = format!(
                 "OS: {} ({})\nDesktop backend: {}\nWorkspace: {}\n\
@@ -584,13 +609,14 @@ mod tests {
             workspace: std::env::temp_dir().join("jarvis-tool-tests"),
             platform: platform::current(),
             vision: true,
+            memory: crate::memory::Memory::new(std::env::temp_dir()),
         }
     }
 
     #[test]
     fn every_tool_has_a_schema_and_a_summary() {
         let schemas = schema_values(true);
-        assert_eq!(schemas.len(), 16);
+        assert_eq!(schemas.len(), 17);
 
         for schema in &schemas {
             let name = schema["function"]["name"].as_str().unwrap();
@@ -648,6 +674,7 @@ mod tests {
             workspace: dir.path().to_path_buf(),
             platform: platform::current(),
             vision: true,
+            memory: crate::memory::Memory::new(std::env::temp_dir()),
         };
 
         let write = execute(
@@ -672,6 +699,7 @@ mod tests {
             workspace: dir.path().to_path_buf(),
             platform: platform::current(),
             vision: true,
+            memory: crate::memory::Memory::new(std::env::temp_dir()),
         };
 
         assert!(execute(
@@ -715,6 +743,7 @@ mod tests {
 
     fn fake_ctx(platform: &Arc<FakePlatform>, workspace: PathBuf) -> ToolContext {
         ToolContext {
+            memory: crate::memory::Memory::new(workspace.clone()),
             workspace,
             platform: platform.clone(),
             vision: true,
@@ -850,6 +879,22 @@ mod tests {
 
         let read = execute("clipboard_get", &json!({}), &ctx).await.unwrap();
         assert_eq!(read.text, "hello");
+    }
+
+    #[tokio::test]
+    async fn remember_writes_a_fact_into_the_memory_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let platform = FakePlatform::new(vec![]);
+        let ctx = fake_ctx(&platform, dir.path().to_path_buf());
+
+        let outcome = execute("remember", &json!({ "text": "prefers metric units" }), &ctx)
+            .await
+            .unwrap();
+        assert!(outcome.text.contains("prefers metric units"), "{}", outcome.text);
+        let stored = std::fs::read_to_string(dir.path().join("memory.md")).unwrap();
+        assert!(stored.contains("prefers metric units"), "{stored}");
+
+        assert!(execute("remember", &json!({ "text": "  " }), &ctx).await.is_err());
     }
 
     #[tokio::test]

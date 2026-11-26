@@ -2,8 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   BridgeEvent,
+  ChatLine,
   ConfirmRequest,
   ConnectionReport,
+  MemoryView,
   Phase,
   SettingsDraft,
   SettingsView,
@@ -93,14 +95,43 @@ export async function ask(prompt: string, voice = false): Promise<void> {
   void runDemo(prompt);
 }
 
-export async function confirm(id: string, allow: boolean): Promise<void> {
+export async function confirm(
+  id: string,
+  allow: boolean,
+  remember = false,
+): Promise<void> {
   if (isLive) {
-    await invoke("confirm", { id, allow });
+    await invoke("confirm", { id, allow, remember });
     return;
   }
   const resolve = demoPending.get(id);
   demoPending.delete(id);
   resolve?.(allow);
+}
+
+/** The stored conversation, ready to repaint the island after a restart. */
+export async function history(): Promise<ChatLine[]> {
+  if (!isLive) return [];
+  const turns = await invoke<Array<{
+    role: "user" | "assistant";
+    text: string;
+  }>>("history");
+  return turns.map((turn, index) => ({ id: `h-${index}`, ...turn }));
+}
+
+export async function forgetHistory(): Promise<void> {
+  if (!isLive) return;
+  await invoke("forget_history");
+}
+
+export async function memoryInfo(): Promise<MemoryView> {
+  if (!isLive) return { facts: 0, approvals: 0 };
+  return invoke<MemoryView>("memory_info");
+}
+
+export async function forgetApprovals(): Promise<void> {
+  if (!isLive) return;
+  await invoke("forget_approvals");
 }
 
 export async function startDictation(): Promise<void> {
