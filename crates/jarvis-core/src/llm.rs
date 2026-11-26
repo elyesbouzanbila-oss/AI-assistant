@@ -265,10 +265,13 @@ pub struct LlmClient {
     /// Local model tried when `chat` fails, so a rate limit or an outage is a
     /// slower answer instead of a dead assistant.
     fallback: Option<Target>,
-    /// Runs before the second fallback attempt: starts WSL and Ollama on a
-    /// machine where nothing is listening yet. Injected by the shell, because
-    /// booting an OS service is not the client's business.
+    /// Runs before the second attempt: starts WSL and Ollama on a machine where
+    /// nothing is listening yet. Injected by the shell, because booting an OS
+    /// service is not the client's business.
     wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    /// A wake hook for the fallback only by default. A loopback *primary*
+    /// needs one too, but a remote primary must not pay a wake-up retry.
+    wake_primary: bool,
 }
 
 /// One endpoint, key and model. Chat and voice each have their own.
@@ -310,6 +313,7 @@ impl LlmClient {
             },
             fallback: None,
             wake: None,
+            wake_primary: false,
         }
     }
 
@@ -330,6 +334,14 @@ impl LlmClient {
     /// Run before the second fallback attempt, e.g. to boot WSL and Ollama.
     pub fn with_wake(mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) -> Self {
         self.wake = Some(wake);
+        self
+    }
+
+    /// Also wake and retry once when the *primary* endpoint is local. Used when
+    /// the user points chat itself at Ollama rather than using it as fallback.
+    pub fn with_primary_wake(mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.wake = Some(wake);
+        self.wake_primary = true;
         self
     }
 
@@ -360,6 +372,22 @@ impl LlmClient {
         };
 
         let Some(fallback) = &self.fallback else {
+            // A local primary has no fallback to trigger its wake hook, so do
+            // it here. Still one retry: start the service, then try once more.
+            if self.wake_primary {
+                if let Some(wake) = self.wake.clone() {
+                    let wake_error = tokio::task::spawn_blocking(move || (wake)()).await.err();
+                    return match self.request(&self.chat, 0.3, messages, tools, on_delta).await {
+                        Ok(completion) => Ok(completion),
+                        Err(error) => Err(match wake_error {
+                            Some(wake_error) => error.context(format!(
+                                "the local model could not be started: {wake_error}"
+                            )),
+                            None => error,
+                        }),
+                    };
+                }
+            }
             return Err(primary_error);
         };
         if streamed.load(std::sync::atomic::Ordering::SeqCst) {
@@ -761,6 +789,38 @@ mod tests {
         (format!("http://127.0.0.1:{port}/v1"), handle)
     }
 
+    /// A server that answers the first request with an error and the second
+    /// with a streamed completion, so a wake-and-retry can be tested for real.
+    fn fail_then_answer() -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let replies = [
+                (500, "application/json", r#"{"error":{"message":"not up yet"}}"#),
+                (
+                    200,
+                    "text/event-stream",
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"local answer\"}}]}\n\ndata: [DONE]\n\n",
+                ),
+            ];
+            for (status, content_type, body) in replies {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut scratch = [0u8; 4096];
+                    let _ = stream.read(&mut scratch);
+                    let head = format!(
+                        "HTTP/1.1 {status} X\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                }
+            }
+        });
+        (format!("http://127.0.0.1:{port}/v1"), handle)
+    }
+
     /// A port nothing listens on, obtained by binding and immediately releasing.
     fn dead_port() -> u16 {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -841,6 +901,33 @@ mod tests {
         assert_eq!(heard, "local answer", "the island still sees it stream");
         primary_handle.join().unwrap();
         local_handle.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_local_primary_is_woken_and_retried_once() {
+        let (url, handle) = fail_then_answer();
+        let config = Config::new(url, "", "local-model", "/tmp/ws");
+        let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let wake = {
+            let wakes = wakes.clone();
+            std::sync::Arc::new(move || {
+                wakes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+
+        let completion = LlmClient::new(&config)
+            .with_primary_wake(wake)
+            .complete(&[ChatMessage::user("hello")], &[], &mut |_| {})
+            .await
+            .expect("the local model answered after waking");
+
+        assert_eq!(completion.content, "local answer");
+        assert_eq!(
+            wakes.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the local model is started exactly once"
+        );
+        handle.join().unwrap();
     }
 
     #[tokio::test]

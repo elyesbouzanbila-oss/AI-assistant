@@ -39,6 +39,10 @@ export interface SettingsView {
   baseUrl: string;
   model: string;
   maxSteps: number;
+  /** `model` or `windows`: who transcribes dictated audio. */
+  sttProvider: string;
+  whisperBin: string;
+  whisperModel: string;
   sttModel: string;
   sttBaseUrl: string;
   fallbackBaseUrl: string;
@@ -60,6 +64,10 @@ export interface SettingsDraft {
   baseUrl: string;
   model: string;
   maxSteps: number;
+  /** `model` or `windows`. */
+  sttProvider: string;
+  whisperBin: string;
+  whisperModel: string;
   sttModel: string;
   sttBaseUrl: string;
   /** Local model used when the endpoint above fails; blank disables it. */

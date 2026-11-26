@@ -8,6 +8,7 @@ pub mod combo;
 pub mod input;
 pub mod recorder;
 pub mod screenshot;
+pub mod transcribe;
 
 #[cfg(not(windows))]
 mod stub;

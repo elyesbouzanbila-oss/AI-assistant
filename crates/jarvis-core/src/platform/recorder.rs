@@ -189,14 +189,97 @@ impl Recorder {
         let _ = tokio::fs::remove_file(&self.stop_path).await;
 
         stopped?;
-        bytes
+        let mut bytes = bytes?;
+        repair_wav_header(&mut bytes);
+        Ok(bytes)
     }
 }
 
-#[cfg(all(test, not(windows)))]
+/// MCI writes the right sample rate but an inconsistent `nAvgBytesPerSec`
+/// (11025 for 22.05 kHz mono 16-bit instead of 44100). SAPI reads the byte
+/// rate when opening a wave file, so a bad value makes it misparse the audio.
+/// Consumers - local recognition and model upload alike - get a valid header.
+fn repair_wav_header(bytes: &mut [u8]) -> bool {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return false;
+    }
+
+    let mut offset = 12;
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32::from_le_bytes(
+            bytes[offset + 4..offset + 8]
+                .try_into()
+                .expect("four bytes"),
+        ) as usize;
+        if id == b"fmt " && offset + 8 + 16 <= bytes.len() {
+            let channels = u16::from_le_bytes(
+                bytes[offset + 10..offset + 12]
+                    .try_into()
+                    .expect("two bytes"),
+            );
+            let rate = u32::from_le_bytes(
+                bytes[offset + 12..offset + 16]
+                    .try_into()
+                    .expect("four bytes"),
+            );
+            let bits = u16::from_le_bytes(
+                bytes[offset + 22..offset + 24]
+                    .try_into()
+                    .expect("two bytes"),
+            );
+            if channels == 0 || bits == 0 {
+                return false;
+            }
+            let align = channels * bits / 8;
+            let byte_rate = rate * align as u32;
+            bytes[offset + 16..offset + 20].copy_from_slice(&byte_rate.to_le_bytes());
+            bytes[offset + 20..offset + 22].copy_from_slice(&align.to_le_bytes());
+            return true;
+        }
+        // Chunk sizes are word-aligned in a RIFF file.
+        offset += 8 + size + size % 2;
+    }
+    false
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    fn wav(rate: u32, byte_rate: u32, channels: u16, bits: u16) -> Vec<u8> {
+        let mut bytes = vec![0u8; 44];
+        bytes[0..4].copy_from_slice(b"RIFF");
+        bytes[8..12].copy_from_slice(b"WAVE");
+        bytes[12..16].copy_from_slice(b"fmt ");
+        bytes[16..20].copy_from_slice(&16u32.to_le_bytes());
+        bytes[20..22].copy_from_slice(&1u16.to_le_bytes());
+        bytes[22..24].copy_from_slice(&channels.to_le_bytes());
+        bytes[24..28].copy_from_slice(&rate.to_le_bytes());
+        bytes[28..32].copy_from_slice(&byte_rate.to_le_bytes());
+        bytes[32..34].copy_from_slice(&(channels * bits / 8).to_le_bytes());
+        bytes[34..36].copy_from_slice(&bits.to_le_bytes());
+        bytes[36..40].copy_from_slice(b"data");
+        bytes
+    }
+
+    #[test]
+    fn repairs_the_byte_rate_mci_writes() {
+        let mut bytes = wav(22050, 11025, 1, 16);
+        assert!(repair_wav_header(&mut bytes));
+        assert_eq!(u32::from_le_bytes(bytes[28..32].try_into().unwrap()), 44100);
+        assert_eq!(u16::from_le_bytes(bytes[32..34].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 22050);
+    }
+
+    #[test]
+    fn leaves_non_riff_data_alone() {
+        let mut bytes = b"not a wave".to_vec();
+        assert!(!repair_wav_header(&mut bytes));
+        assert_eq!(bytes, b"not a wave");
+    }
+
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn reports_a_clear_error_off_windows() {
         let message = match Recorder::start().await {

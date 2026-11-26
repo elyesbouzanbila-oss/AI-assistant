@@ -7,15 +7,27 @@
 //! error path fails towards "accept clicks", so the island can never end up in
 //! the classic stuck-click-through state.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::{LogicalSize, PhysicalPosition, WebviewWindow};
 
 /// Set by `apply_phase`; the passthrough thread reads it.
 static IDLE: AtomicBool = AtomicBool::new(true);
+/// Last phase change, so the poller can leave the window alone while a resize
+/// is settling. A stale sample mid-resize makes the island close under a
+/// stationary cursor and reopen on the next poll - a rapid blink.
+static LAST_PHASE_CHANGE: AtomicU64 = AtomicU64::new(0);
 
 const TOP_MARGIN: f64 = 12.0;
+const SETTLE: Duration = Duration::from_millis(250);
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// Logical size of the island for a phase. Mirrors `PHASE_SIZE` in
 /// `src/renderer/lib/types.ts`.
@@ -35,6 +47,7 @@ pub fn size_for(phase: &str) -> (f64, f64) {
 /// Resize, re-centre and update the click-through state for a phase.
 pub fn apply_phase(window: &WebviewWindow, phase: &str) {
     let (width, height) = size_for(phase);
+    LAST_PHASE_CHANGE.store(now_millis(), Ordering::SeqCst);
 
     let _ = window.set_size(LogicalSize::new(width, height));
     centre_top(window, width);
@@ -79,6 +92,14 @@ pub fn spawn_passthrough_loop(window: WebviewWindow) {
                 if ignoring && window.set_ignore_cursor_events(false).is_ok() {
                     ignoring = false;
                 }
+                continue;
+            }
+
+            // `apply_phase` just made the window interactive. Do not second-
+            // guess it from geometry sampled while the OS is still resizing.
+            let last_change = LAST_PHASE_CHANGE.load(Ordering::SeqCst);
+            if now_millis().saturating_sub(last_change) < SETTLE.as_millis() as u64 {
+                ignoring = false;
                 continue;
             }
 

@@ -96,7 +96,9 @@ JARVIS_FALLBACK_MODEL=minicpm5:latest
 Both are in the settings panel too, under **Fallback**. On Windows the app starts WSL,
 starts `ollama serve` if nothing is listening on that port, and loads the model — you do
 not need a terminal open. The fallback is tried once per turn, before any text has
-streamed; if the local model is down too, the error names both failures.
+streamed; if the local model is down too, the error names both failures. Pointing the
+**primary** endpoint at Ollama works the same way: a loopback primary gets one
+start-and-retry attempt too, so WSL and Ollama still come up on their own.
 
 A local model is usually weaker: it may not support image input (so `screenshot` fails)
 and it will not have anything like the cloud model's judgement. Keep it as a safety net.
@@ -110,9 +112,11 @@ and it will not have anything like the cloud model's judgement. Keep it as a saf
 
 ## Voice
 
-Click the mic in the composer (or press **Ctrl+Shift+Space**), speak, and stop. The transcript
-lands in the input box so you can fix a word before sending — nothing runs on its own. Recordings
-stop by themselves after 30 seconds.
+Click the mic in the composer (or press **Ctrl+Shift+Space**), speak, and stop. With an empty
+composer the transcript goes straight to the model and the answer is read aloud, so a spoken
+question is one action. If you were already typing, the transcript is appended instead of sent —
+a half-written draft is never fired off, and you can fix a misheard word before pressing Send.
+Recordings stop by themselves after 30 seconds.
 
 By default the endpoint that answers questions also transcribes the audio (the OpenAI `input_audio`
 content part), so your existing key covers it. Gemini 2.5 Flash and the GPT audio models accept
@@ -122,6 +126,19 @@ Transcription can also live somewhere else entirely: set `JARVIS_STT_BASE_URL` a
 `JARVIS_STT_API_KEY` and the recording is sent there instead. That is what makes a fully local chat
 model usable with cloud dictation. A separate endpoint never inherits `JARVIS_API_KEY`, so the chat
 key cannot leak to another provider.
+
+Set `JARVIS_STT_PROVIDER=windows` (or pick **Windows speech recognition** in the panel) to
+transcribe offline with the Windows speech engine instead. No voice model, endpoint or key is
+needed; the recording goes through `System.Speech` in a hidden PowerShell, and the transcript is
+handed to the text model as usual. Accuracy is below a good audio model and the matching speech
+language pack must be installed, but nothing leaves the machine.
+
+For accurate local dictation, pick **Whisper in WSL**. This runs whisper.cpp inside WSL Debian —
+the agent model and the STT model can then live in the same Linux environment. Set
+`JARVIS_WHISPER_BIN` (a command on WSL's PATH, e.g. `whisper-cli`, or its full Linux path) and
+`JARVIS_WHISPER_MODEL` (a Linux path to a GGUF model such as `ggml-small.en.bin`). The Windows
+WAV is mounted at `/mnt/c/...` for the run, and the transcript goes to the text model exactly as
+before. Both fields are in the panel too.
 
 Capture is Windows MCI (`waveaudio`) through the same hidden PowerShell used for window control,
 so there is no audio dependency. The WAV is written to the temp folder, sent once, and deleted
