@@ -619,10 +619,17 @@ pub fn run() {
                     let toggle = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
                     if shortcut == &toggle {
                         if let Some(window) = island_window(app) {
-                            island::apply_phase(&window, "open");
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            let _ = app.emit("agent:focus-input", ());
+                            if island::is_idle() {
+                                island::apply_phase(&window, "open");
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                                let _ = app.emit("agent:focus-input", ());
+                            } else {
+                                // Rust owns the window size, but React renders the
+                                // body; tell it to go back to the pill as well.
+                                island::park(&window);
+                                let _ = app.emit("agent:collapse", ());
+                            }
                         }
                         return;
                     }
@@ -693,7 +700,8 @@ pub fn run() {
                 let _ = handle.emit("agent:error", serde_json::json!({ "message": message }));
             }
 
-            // Ctrl+Space to summon, Ctrl+Shift+Space to dictate, Ctrl+Shift+Q to quit.
+            // Ctrl+Space to summon or minimise, Ctrl+Shift+Space to dictate,
+            // Ctrl+Shift+Q to quit.
             let toggle = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
             let dictate = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
             let quit = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyQ);

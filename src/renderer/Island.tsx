@@ -299,6 +299,14 @@ export function Island() {
           setPhase((current) => (current === "idle" ? "open" : current));
           break;
 
+        case "collapse":
+          // Resizing synthesizes hover events; without the guard the pill
+          // would reopen under a stationary cursor right after Ctrl+Space.
+          clearClose();
+          hoverGuard.current = Date.now() + HOVER_SETTLE_MS;
+          collapse();
+          break;
+
         case "dictate":
           // Functional update: this listener is registered once per render.
           setPhase((current) =>

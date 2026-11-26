@@ -53,6 +53,9 @@ export function subscribe(handler: (event: BridgeEvent) => void): () => void {
     const offFocus = await listen("agent:focus-input", () =>
       handler({ type: "focus" }),
     );
+    const offCollapse = await listen("agent:collapse", () =>
+      handler({ type: "collapse" }),
+    );
     const offDictate = await listen("agent:dictate", () =>
       handler({ type: "dictate" }),
     );
@@ -64,6 +67,7 @@ export function subscribe(handler: (event: BridgeEvent) => void): () => void {
       offFinal,
       offError,
       offFocus,
+      offCollapse,
       offDictate,
     ];
     if (closed) {

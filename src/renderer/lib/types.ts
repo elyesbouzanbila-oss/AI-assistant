@@ -18,8 +18,10 @@ export interface ConfirmRequest {
 
 export type BridgeEvent =
   | { type: "phase"; phase: Phase; label?: string }
-  /** Rust asked for the composer (Ctrl+Space). */
+  /** Rust asked for the composer (Ctrl+Space while idle). */
   | { type: "focus" }
+  /** Rust parked the island (Ctrl+Space while expanded). */
+  | { type: "collapse" }
   /** Ctrl+Shift+Space: start or stop dictation. */
   | { type: "dictate" }
   | { type: "delta"; text: string }

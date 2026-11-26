@@ -132,3 +132,8 @@ pub fn spawn_passthrough_loop(window: WebviewWindow) {
 pub fn park(window: &WebviewWindow) {
     apply_phase(window, "idle");
 }
+
+/// Whether Ctrl+Space should summon the island or park it again.
+pub fn is_idle() -> bool {
+    IDLE.load(Ordering::SeqCst)
+}
