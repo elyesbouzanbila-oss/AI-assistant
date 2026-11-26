@@ -284,10 +284,10 @@ struct Target {
 impl LlmClient {
     pub fn new(config: &Config) -> Self {
         // Attribution headers exist only for OpenRouter; other endpoints get an
-        // empty map so a stray JARVIS_SITE_URL cannot leak to them.
+        // empty map so a stray ALFRED_SITE_URL cannot leak to them.
         let mut headers = reqwest::header::HeaderMap::new();
         if config.is_openrouter() {
-            insert(&mut headers, "X-OpenRouter-Title", "Jarvis");
+            insert(&mut headers, "X-OpenRouter-Title", "Alfred");
             if let Some(url) = valid_site_url(config.site_url.as_deref()) {
                 insert(&mut headers, "HTTP-Referer", url);
             }
@@ -483,7 +483,7 @@ impl LlmClient {
             .with_context(|| {
                 format!(
                     "voice transcription failed with {} at {}. If that model cannot take \
-                     audio input, set JARVIS_STT_MODEL to one that can",
+                     audio input, set ALFRED_STT_MODEL to one that can",
                     self.voice.model, self.voice.url
                 )
             })?;
@@ -536,7 +536,7 @@ impl LlmClient {
             let body = response.text().await.unwrap_or_default();
             let snippet: String = body.chars().take(400).collect();
             bail!(
-                "model endpoint returned {status}. Check JARVIS_BASE_URL, JARVIS_MODEL ({}), \
+                "model endpoint returned {status}. Check ALFRED_BASE_URL, ALFRED_MODEL ({}), \
                  and that the key is valid. Response: {snippet}",
                 target.model
             );
@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn attribution_headers_only_go_to_openrouter() {
         // No OpenRouter headers are built for any other endpoint, whatever
-        // JARVIS_SITE_URL holds.
+        // ALFRED_SITE_URL holds.
         let other = Config::new("https://api.openai.com/v1", "k", "m", "/tmp");
         assert!(!other.is_openrouter());
 

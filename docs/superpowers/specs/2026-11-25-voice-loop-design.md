@@ -7,7 +7,7 @@ already installed. No new dependencies, no network, no tokens.
 
 ## Why
 
-Jarvis listens but never answers. Dictation is half a conversation: you speak, it replies on
+Alfred listens but never answers. Dictation is half a conversation: you speak, it replies on
 screen, and you have to look at the island and read. Everything else about the app assumes you
 are at the keyboard, which is the opposite of why voice input exists.
 
@@ -19,7 +19,7 @@ This closes the loop: speak a request, hear the answer.
 |---|---|---|
 | When it speaks | Only when the turn started by dictation | Typed turns stay silent, so it never talks over a meeting. Predictable. |
 | Engine | Windows `System.Speech` (SAPI) via hidden PowerShell | Ships with Windows, offline, free. Keeps the project rule of no audio crates and no new dependencies. |
-| Where the spoken text comes from | A pure function in `jarvis-core`, not a model call | Deterministic, reviewable, testable without Windows or audio, and costs no tokens. The weaker fallback model also behaves unpredictably at "write a spoken version". |
+| Where the spoken text comes from | A pure function in `alfred-core`, not a model call | Deterministic, reviewable, testable without Windows or audio, and costs no tokens. The weaker fallback model also behaves unpredictably at "write a spoken version". |
 | When it starts | After the turn's final answer | Sentence-by-sentence streaming is lower latency but needs a queue, de-duplication and careful cancel. It can be layered on later without changing the summariser. |
 | Length handling | Under 200 characters verbatim; longer, first two sentences + "The rest is on screen." | A voice answer cannot be skimmed. The screen keeps the detail; the ear gets the headline. |
 | Stopping | Kill the PowerShell process | Blocking `Speak` has no in-band cancel; the process is the natural handle, and it matches how `ollama.rs` already manages a child. |
@@ -37,7 +37,7 @@ differently on a slow machine.
 
 Two units, each independently testable.
 
-### `speech::to_speech` — `crates/jarvis-core/src/speech.rs` (new)
+### `speech::to_speech` — `crates/alfred-core/src/speech.rs` (new)
 
 ```rust
 /// What should be read aloud for this answer, if anything.
@@ -68,9 +68,9 @@ pub fn is_speaking() -> bool;
 
 - Spawns hidden PowerShell (`CREATE_NO_WINDOW`), loading `System.Speech` and calling the
   blocking `Speak`.
-- **Text and voice name travel in environment variables** (`JARVIS_SPEECH_TEXT`,
-  `JARVIS_SPEECH_VOICE`), never interpolated into script source — the same rule as
-  `JARVIS_ARG`, so model output cannot become code.
+- **Text and voice name travel in environment variables** (`ALFRED_SPEECH_TEXT`,
+  `ALFRED_SPEECH_VOICE`), never interpolated into script source — the same rule as
+  `ALFRED_ARG`, so model output cannot become code.
 - Rate is a `-10..=10` integer validated before use.
 - One child at a time: speaking again stops the previous one first, so answers cannot overlap.
 - The child is killed on app exit.
@@ -94,20 +94,20 @@ Tracks whether the composer text came from dictation and is unedited:
 - A small muted line under the composer while speaking is **not** in scope; the orb already
   shows activity.
 
-### Settings — `crates/jarvis-core/src/config.rs`
+### Settings — `crates/alfred-core/src/config.rs`
 
 Three values, same precedence as everything else (environment > `settings.json` > default),
 plus panel fields and the `env` tag for locked ones:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `JARVIS_SPEAK` | `true` | master switch; `false` never speaks |
-| `JARVIS_VOICE` | unset | voice name as SAPI reports it; blank = system default |
-| `JARVIS_SPEECH_RATE` | `0` | clamped to −10..=10 |
+| `ALFRED_SPEAK` | `true` | master switch; `false` never speaks |
+| `ALFRED_VOICE` | unset | voice name as SAPI reports it; blank = system default |
+| `ALFRED_SPEECH_RATE` | `0` | clamped to −10..=10 |
 
 `.env.example`, the settings panel, `README.md` and the `AGENTS.md` variable table all gain
 these three. `AGENTS.md` also gains the "speech text goes through environment variables" rule
-next to the `JARVIS_ARG` one.
+next to the `ALFRED_ARG` one.
 
 Panel placement: a **Voice** row gains two fields (voice, rate) and a **Speak replies**
 toggle, next to the existing voice model/endpoint/key.
@@ -137,7 +137,7 @@ Typed send never reaches the speech branch.
 ## Testing
 
 `to_speech` is a pure function, so the whole decision surface is unit-testable in
-`cargo test -p jarvis-core`:
+`cargo test -p alfred-core`:
 
 | Test | Asserts |
 |---|---|
@@ -165,5 +165,5 @@ would be flaky, and the CI Windows job only builds, it does not run audio.
   not install anything.
 - **Spawn cost.** Each utterance starts a PowerShell process (~200–400 ms) before the first
   syllable. Acceptable for answers; noticeable if this were used for per-word feedback.
-- **Half-duplex.** Recording is blocked while speaking, otherwise the mic hears Jarvis. This is
+- **Half-duplex.** Recording is blocked while speaking, otherwise the mic hears Alfred. This is
   a deliberate limitation, not an oversight.

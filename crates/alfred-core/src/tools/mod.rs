@@ -15,7 +15,7 @@ const MAX_READ_BYTES: u64 = 64 * 1024;
 /// Most entries one `list_files` call reports.
 const MAX_LIST_ENTRIES: usize = 200;
 /// Largest clipboard write. Windows caps a whole process environment block
-/// at 32767 characters, and the text travels as `JARVIS_ARG`.
+/// at 32767 characters, and the text travels as `ALFRED_ARG`.
 const MAX_CLIPBOARD_BYTES: usize = 8_000;
 
 pub struct ToolContext {
@@ -606,7 +606,7 @@ mod tests {
 
     fn ctx() -> ToolContext {
         ToolContext {
-            workspace: std::env::temp_dir().join("jarvis-tool-tests"),
+            workspace: std::env::temp_dir().join("alfred-tool-tests"),
             platform: platform::current(),
             vision: true,
             memory: crate::memory::Memory::new(std::env::temp_dir()),

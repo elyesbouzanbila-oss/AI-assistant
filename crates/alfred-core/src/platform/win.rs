@@ -3,7 +3,7 @@
 //! App and window control goes through PowerShell: no FFI bindings to keep in
 //! sync with a `windows` crate version, and every action is something you can
 //! reproduce by hand in a terminal. Model-supplied text is passed via the
-//! `JARVIS_ARG` environment variable, never interpolated into the script, so a
+//! `ALFRED_ARG` environment variable, never interpolated into the script, so a
 //! prompt injection cannot turn a tool call into arbitrary PowerShell.
 //!
 //! Input injection uses enigo (`SendInput` under the hood).
@@ -34,7 +34,7 @@ async fn powershell(script: &str, arg: Option<&str>) -> Result<String> {
         .stderr(Stdio::piped());
 
     if let Some(arg) = arg {
-        command.env("JARVIS_ARG", arg);
+        command.env("ALFRED_ARG", arg);
     }
 
     // Keep the console from flashing up on every action.
@@ -60,7 +60,7 @@ async fn powershell(script: &str, arg: Option<&str>) -> Result<String> {
 /// List the Start-menu app that best matches `name`.
 const OPEN_APP: &str = r#"
 $ErrorActionPreference = 'Stop'
-$n = $env:JARVIS_ARG
+$n = $env:ALFRED_ARG
 if ([string]::IsNullOrWhiteSpace($n)) { throw 'no application name given' }
 $app = Get-StartApps | Where-Object { $_.Name -like "*$n*" } | Select-Object -First 1
 if ($null -ne $app) { Start-Process ("shell:AppsFolder\" + $app.AppID); 'opened ' + $app.Name; return }
@@ -71,7 +71,7 @@ try { Start-Process $n; 'started ' + $n } catch { throw ("no application matchin
 /// process is how you lose unsaved work, so this never escalates.
 const CLOSE_APP: &str = r#"
 $ErrorActionPreference = 'Stop'
-$n = $env:JARVIS_ARG
+$n = $env:ALFRED_ARG
 $procs = @(Get-Process | Where-Object { ($_.MainWindowTitle -like "*$n*") -or ($_.ProcessName -like "*$n*") })
 if ($procs.Count -eq 0) { "nothing matched '$n'"; return }
 $closed = @()
@@ -82,12 +82,12 @@ else { 'asked to close: ' + ($closed -join ', ') }
 
 const FOCUS_WINDOW: &str = r#"
 $ErrorActionPreference = 'Stop'
-$n = $env:JARVIS_ARG
-Add-Type -Namespace JarvisNative -Name Win -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
+$n = $env:ALFRED_ARG
+Add-Type -Namespace AlfredNative -Name Win -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
 $p = Get-Process | Where-Object { $_.MainWindowTitle -like "*$n*" } | Select-Object -First 1
 if ($null -eq $p) { "no window matching '$n'"; return }
-[JarvisNative.Win]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
-[JarvisNative.Win]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+[AlfredNative.Win]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+[AlfredNative.Win]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
 'focused ' + $p.MainWindowTitle
 "#;
 
@@ -103,15 +103,15 @@ $ErrorActionPreference = 'Stop'
 Get-Clipboard -Raw
 "#;
 
-/// The text arrives in `JARVIS_ARG`, never in the script source: copying a
+/// The text arrives in `ALFRED_ARG`, never in the script source: copying a
 /// pasted URL must not be able to become a command.
 const SET_CLIPBOARD: &str = r#"
 $ErrorActionPreference = 'Stop'
-Set-Clipboard -Value $env:JARVIS_ARG
+Set-Clipboard -Value $env:ALFRED_ARG
 'ok'
 "#;
 
-/// Save the whole virtual desktop to the path in `JARVIS_ARG`.
+/// Save the whole virtual desktop to the path in `ALFRED_ARG`.
 const SCREENSHOT: &str = r#"
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
@@ -120,7 +120,7 @@ $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
 $bmp = New-Object System.Drawing.Bitmap $vs.Width, $vs.Height
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.CopyFromScreen($vs.X, $vs.Y, 0, 0, $bmp.Size)
-$bmp.Save($env:JARVIS_ARG, [System.Drawing.Imaging.ImageFormat]::Png)
+$bmp.Save($env:ALFRED_ARG, [System.Drawing.Imaging.ImageFormat]::Png)
 $g.Dispose(); $bmp.Dispose()
 'saved'
 "#;
@@ -192,7 +192,7 @@ impl Platform for WindowsPlatform {
     fn screenshot(&self) -> PlatformFuture<'_> {
         Box::pin(async move {
             let path = std::env::temp_dir().join(format!(
-                "jarvis-shot-{}-{}.png",
+                "alfred-shot-{}-{}.png",
                 std::process::id(),
                 chrono::Local::now().timestamp_millis()
             ));

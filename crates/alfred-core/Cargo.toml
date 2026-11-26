@@ -1,8 +1,8 @@
 [package]
-name = "jarvis-core"
+name = "alfred-core"
 version.workspace = true
 edition.workspace = true
-description = "Agent loop, LLM client, tools and OS bridge for Jarvis"
+description = "Agent loop, LLM client, tools and OS bridge for Alfred"
 
 [dependencies]
 anyhow = "1"

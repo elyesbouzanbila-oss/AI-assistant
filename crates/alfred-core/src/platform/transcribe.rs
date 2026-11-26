@@ -25,11 +25,11 @@ const TRANSCRIBE_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 try {
   Add-Type -AssemblyName System.Speech
-  $path = $env:JARVIS_ARG
+  $path = $env:ALFRED_ARG
   if ([string]::IsNullOrWhiteSpace($path)) { throw 'no recording path given' }
 
-  $global:JarvisParts = New-Object System.Collections.Generic.List[string]
-  $global:JarvisDone = $false
+  $global:AlfredParts = New-Object System.Collections.Generic.List[string]
+  $global:AlfredDone = $false
   $recognizer = New-Object System.Speech.Recognition.SpeechRecognitionEngine
   $recognizer.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
   $recognizer.SetInputToWaveFile($path)
@@ -37,22 +37,22 @@ try {
   $onRecognized = Register-ObjectEvent -InputObject $recognizer -EventName SpeechRecognized -Action {
     try {
       if ($null -ne $EventArgs.Result -and $EventArgs.Result.Text) {
-        $global:JarvisParts.Add([string]$EventArgs.Result.Text)
+        $global:AlfredParts.Add([string]$EventArgs.Result.Text)
       }
     } catch { }
   }
   $onCompleted = Register-ObjectEvent -InputObject $recognizer -EventName RecognizeCompleted -Action {
-    $global:JarvisDone = $true
+    $global:AlfredDone = $true
   }
   $recognizer.RecognizeAsync([System.Speech.Recognition.RecognizeMode]::Multiple)
 
   $deadline = [DateTime]::UtcNow.AddSeconds(35)
-  while (-not $global:JarvisDone -and [DateTime]::UtcNow -lt $deadline) {
+  while (-not $global:AlfredDone -and [DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 50
   }
   # Read the result before cleanup: an event job that already went away must
   # not turn a recognised sentence into an error.
-  $text = ($global:JarvisParts -join ' ')
+  $text = ($global:AlfredParts -join ' ')
   try { Unregister-Event -SubscriptionId $onRecognized.Id } catch { }
   try { Unregister-Event -SubscriptionId $onCompleted.Id } catch { }
   try { $recognizer.RecognizeAsyncCancel() } catch { }
@@ -86,7 +86,7 @@ pub async fn transcribe_wav(wav: &[u8]) -> Result<String> {
             "-Command",
             TRANSCRIBE_SCRIPT,
         ])
-        .env("JARVIS_ARG", path.to_string_lossy().to_string())
+        .env("ALFRED_ARG", path.to_string_lossy().to_string())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -185,7 +185,7 @@ fn to_wsl_path(path: &Path) -> String {
 
 fn temp_wav_path() -> PathBuf {
     std::env::temp_dir().join(format!(
-        "jarvis-stt-{}-{}.wav",
+        "alfred-stt-{}-{}.wav",
         std::process::id(),
         chrono::Local::now().timestamp_millis()
     ))

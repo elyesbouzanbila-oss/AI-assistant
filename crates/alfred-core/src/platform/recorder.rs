@@ -16,24 +16,24 @@ use tokio::process::{Child, ChildStdout, Command};
 /// Longest single recording; the island stops at the same point.
 pub const MAX_SECONDS: u64 = 30;
 
-/// `JARVIS_ARG` carries the output path, so nothing is interpolated into
+/// `ALFRED_ARG` carries the output path, so nothing is interpolated into
 /// PowerShell source. Failures are printed on stdout: a thrown error only
 /// reaches stderr, which the caller does not read.
 const RECORD_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 try {
-  Add-Type -Namespace JarvisAudio -Name Mci -MemberDefinition '[DllImport("winmm.dll", CharSet=CharSet.Auto)] public static extern int mciSendString(string command, System.Text.StringBuilder buffer, int bufferSize, IntPtr hwnd); [DllImport("winmm.dll", CharSet=CharSet.Auto)] public static extern int mciGetErrorString(int code, System.Text.StringBuilder buffer, int size);'
+  Add-Type -Namespace AlfredAudio -Name Mci -MemberDefinition '[DllImport("winmm.dll", CharSet=CharSet.Auto)] public static extern int mciSendString(string command, System.Text.StringBuilder buffer, int bufferSize, IntPtr hwnd); [DllImport("winmm.dll", CharSet=CharSet.Auto)] public static extern int mciGetErrorString(int code, System.Text.StringBuilder buffer, int size);'
   function Send-Mci([string]$command) {
     $buffer = New-Object System.Text.StringBuilder 256
-    return [JarvisAudio.Mci]::mciSendString($command, $buffer, 256, [IntPtr]::Zero)
+    return [AlfredAudio.Mci]::mciSendString($command, $buffer, 256, [IntPtr]::Zero)
   }
   function Get-MciError([int]$code) {
     $buffer = New-Object System.Text.StringBuilder 256
-    [void][JarvisAudio.Mci]::mciGetErrorString($code, $buffer, 256)
+    [void][AlfredAudio.Mci]::mciGetErrorString($code, $buffer, 256)
     return $buffer.ToString().Trim()
   }
 
-  $path = $env:JARVIS_ARG
+  $path = $env:ALFRED_ARG
   if ([string]::IsNullOrWhiteSpace($path)) { throw 'no recording path given' }
 
   # Devices disagree about what they will record, and MCI accepts the `set`
@@ -99,7 +99,7 @@ impl Recorder {
         }
 
         let path = std::env::temp_dir().join(format!(
-            "jarvis-voice-{}-{}.wav",
+            "alfred-voice-{}-{}.wav",
             std::process::id(),
             chrono::Local::now().timestamp_millis()
         ));
@@ -116,7 +116,7 @@ impl Recorder {
                 "-Command",
                 RECORD_SCRIPT,
             ])
-            .env("JARVIS_ARG", path.to_string_lossy().to_string())
+            .env("ALFRED_ARG", path.to_string_lossy().to_string())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);

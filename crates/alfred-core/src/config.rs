@@ -42,7 +42,7 @@ impl SttProvider {
 }
 
 /// Runtime configuration, resolved at startup from the environment and from
-/// `~/Jarvis/settings.json` (written by the island's settings panel).
+/// `~/Alfred/settings.json` (written by the island's settings panel).
 ///
 /// The API key never leaves the Rust process: it is never sent to the webview
 /// and never written into a log.
@@ -56,40 +56,40 @@ pub struct Config {
     pub max_steps: usize,
     /// Sandbox root for file tools.
     pub workspace: PathBuf,
-    /// Optional `JARVIS_SITE_URL`, sent as `HTTP-Referer` to OpenRouter only.
+    /// Optional `ALFRED_SITE_URL`, sent as `HTTP-Referer` to OpenRouter only.
     pub site_url: Option<String>,
-    /// `JARVIS_STT_PROVIDER`: `model` (default), `windows` or `whisper`.
+    /// `ALFRED_STT_PROVIDER`: `model` (default), `windows` or `whisper`.
     pub stt_provider: SttProvider,
-    /// `JARVIS_WHISPER_BIN`: whisper-cli command or Linux path inside WSL.
+    /// `ALFRED_WHISPER_BIN`: whisper-cli command or Linux path inside WSL.
     pub whisper_bin: Option<String>,
-    /// `JARVIS_WHISPER_MODEL`: Linux path to a GGUF model inside WSL.
+    /// `ALFRED_WHISPER_MODEL`: Linux path to a GGUF model inside WSL.
     pub whisper_model: Option<String>,
-    /// Optional `JARVIS_STT_MODEL`: transcribes voice when the main model
+    /// Optional `ALFRED_STT_MODEL`: transcribes voice when the main model
     /// cannot take audio. Falls back to `model` when unset.
     pub stt_model: Option<String>,
-    /// Optional `JARVIS_STT_BASE_URL`: a different endpoint for voice
+    /// Optional `ALFRED_STT_BASE_URL`: a different endpoint for voice
     /// transcription, so chat can run locally while voice stays in the cloud
     /// (or the reverse). Falls back to `base_url`.
     pub stt_base_url: Option<String>,
-    /// Optional `JARVIS_STT_API_KEY`: the key for `stt_base_url`. Never falls
+    /// Optional `ALFRED_STT_API_KEY`: the key for `stt_base_url`. Never falls
     /// back across hosts, so the chat key cannot leak to another provider.
     pub stt_api_key: Option<String>,
-    /// Optional `JARVIS_FALLBACK_BASE_URL` / `JARVIS_FALLBACK_MODEL`: a local
+    /// Optional `ALFRED_FALLBACK_BASE_URL` / `ALFRED_FALLBACK_MODEL`: a local
     /// model used when the primary endpoint fails. Both are needed; see
     /// `Config::fallback`.
     pub fallback_base_url: Option<String>,
     pub fallback_model: Option<String>,
-    /// Optional `JARVIS_FALLBACK_API_KEY`: only for a remote fallback, which is
+    /// Optional `ALFRED_FALLBACK_API_KEY`: only for a remote fallback, which is
     /// unusual - a loopback endpoint needs no key.
     pub fallback_api_key: Option<String>,
-    /// `JARVIS_SPEAK`: read an answer aloud when the turn started by dictation.
+    /// `ALFRED_SPEAK`: read an answer aloud when the turn started by dictation.
     pub speak: bool,
-    /// `JARVIS_VISION`: offer the screenshot tool. Off for a model whose
+    /// `ALFRED_VISION`: offer the screenshot tool. Off for a model whose
     /// endpoint rejects image input, so a turn cannot die on a screenshot.
     pub vision: bool,
-    /// `JARVIS_VOICE`: SAPI voice name; empty means the system default.
+    /// `ALFRED_VOICE`: SAPI voice name; empty means the system default.
     pub voice: String,
-    /// `JARVIS_SPEECH_RATE`: SAPI rate, clamped to -10..=10.
+    /// `ALFRED_SPEECH_RATE`: SAPI rate, clamped to -10..=10.
     pub speech_rate: i32,
 }
 
@@ -113,7 +113,7 @@ impl Config {
 
         let resolved = resolve(&load_settings()?);
 
-        let workspace = jarvis_dir()?.join("workspace");
+        let workspace = alfred_dir()?.join("workspace");
         std::fs::create_dir_all(&workspace)
             .with_context(|| format!("could not create workspace at {}", workspace.display()))?;
 
@@ -221,7 +221,7 @@ impl Config {
         match &self.whisper_model {
             Some(path) if !path.trim().is_empty() => Ok(path.trim().to_string()),
             _ => anyhow::bail!(
-                "no Whisper model configured. Set JARVIS_WHISPER_MODEL to the Linux path \
+                "no Whisper model configured. Set ALFRED_WHISPER_MODEL to the Linux path \
                  of a GGUF model inside WSL, e.g. /home/Chief/whisper.cpp/models/ggml-small.en.bin"
             ),
         }
@@ -248,10 +248,10 @@ impl Config {
             );
         }
         if self.model.trim().is_empty() {
-            anyhow::bail!("JARVIS_MODEL is not set.");
+            anyhow::bail!("ALFRED_MODEL is not set.");
         }
         if !self.base_url.starts_with("http") {
-            anyhow::bail!("JARVIS_BASE_URL must start with http:// or https://");
+            anyhow::bail!("ALFRED_BASE_URL must start with http:// or https://");
         }
         if let Some(fallback) = self.fallback() {
             if !fallback.base_url.starts_with("http") {
@@ -259,7 +259,7 @@ impl Config {
             }
             if fallback.api_key.trim().is_empty() && !is_loopback(&fallback.base_url) {
                 anyhow::bail!(
-                    "the fallback endpoint {} is remote but has no key. Set JARVIS_FALLBACK_API_KEY, \
+                    "the fallback endpoint {} is remote but has no key. Set ALFRED_FALLBACK_API_KEY, \
                      or point it at Ollama on loopback, which needs none",
                     fallback.base_url
                 );
@@ -310,7 +310,7 @@ impl Config {
     }
 }
 
-/// Values persisted by the settings panel in `~/Jarvis/settings.json`.
+/// Values persisted by the settings panel in `~/Alfred/settings.json`.
 ///
 /// Every field is optional: a value left out falls back to the environment and
 /// then to the built-in default. Nothing here re-encrypts a key; it is plain
@@ -364,26 +364,38 @@ pub struct Resolved {
     pub speech_rate: i32,
 }
 
+/// Current and previous variable prefixes. Both are read, with the new name
+/// winning, so an existing `.env` or shell setup survives the rename.
+const ENV_PREFIX: &str = "ALFRED_";
+const LEGACY_ENV_PREFIX: &str = "JARVIS_";
+
+fn legacy_name(name: &str) -> String {
+    format!(
+        "{LEGACY_ENV_PREFIX}{}",
+        name.strip_prefix(ENV_PREFIX).unwrap_or(name)
+    )
+}
+
 /// Variables that override the settings file.
 pub const ENV_NAMES: [&str; 18] = [
-    "JARVIS_BASE_URL",
-    "JARVIS_API_KEY",
-    "JARVIS_MODEL",
-    "JARVIS_MAX_STEPS",
-    "JARVIS_SITE_URL",
-    "JARVIS_STT_PROVIDER",
-    "JARVIS_WHISPER_BIN",
-    "JARVIS_WHISPER_MODEL",
-    "JARVIS_STT_MODEL",
-    "JARVIS_STT_BASE_URL",
-    "JARVIS_STT_API_KEY",
-    "JARVIS_FALLBACK_BASE_URL",
-    "JARVIS_FALLBACK_MODEL",
-    "JARVIS_FALLBACK_API_KEY",
-    "JARVIS_SPEAK",
-    "JARVIS_VISION",
-    "JARVIS_VOICE",
-    "JARVIS_SPEECH_RATE",
+    "ALFRED_BASE_URL",
+    "ALFRED_API_KEY",
+    "ALFRED_MODEL",
+    "ALFRED_MAX_STEPS",
+    "ALFRED_SITE_URL",
+    "ALFRED_STT_PROVIDER",
+    "ALFRED_WHISPER_BIN",
+    "ALFRED_WHISPER_MODEL",
+    "ALFRED_STT_MODEL",
+    "ALFRED_STT_BASE_URL",
+    "ALFRED_STT_API_KEY",
+    "ALFRED_FALLBACK_BASE_URL",
+    "ALFRED_FALLBACK_MODEL",
+    "ALFRED_FALLBACK_API_KEY",
+    "ALFRED_SPEAK",
+    "ALFRED_VISION",
+    "ALFRED_VOICE",
+    "ALFRED_SPEECH_RATE",
 ];
 
 /// Resolve settings exactly as `Config::load` does, but without validating.
@@ -394,9 +406,11 @@ pub fn resolve(settings: &Settings) -> Resolved {
 /// The seam that keeps precedence testable without touching the real environment.
 fn resolve_with(settings: &Settings, env: impl Fn(&str) -> Option<String>) -> Resolved {
     // Environment first, then the file, then the default: an existing `.env`
-    // keeps working and the panel flags the fields it overrides.
+    // keeps working and the panel flags the fields it overrides. Each variable
+    // is looked up under its new and its old name, in that order.
     let value = |name: &str, from_file: Option<String>| {
         env(name)
+            .or_else(|| env(&legacy_name(name)))
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .or_else(|| {
@@ -407,51 +421,51 @@ fn resolve_with(settings: &Settings, env: impl Fn(&str) -> Option<String>) -> Re
     };
 
     Resolved {
-        base_url: value("JARVIS_BASE_URL", settings.base_url.clone())
+        base_url: value("ALFRED_BASE_URL", settings.base_url.clone())
             .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
             .trim_end_matches('/')
             .to_string(),
-        api_key: value("JARVIS_API_KEY", settings.api_key.clone()).unwrap_or_default(),
-        model: value("JARVIS_MODEL", settings.model.clone())
+        api_key: value("ALFRED_API_KEY", settings.api_key.clone()).unwrap_or_default(),
+        model: value("ALFRED_MODEL", settings.model.clone())
             .unwrap_or_else(|| "gpt-4o-mini".to_string())
             .trim()
             .to_string(),
         max_steps: value(
-            "JARVIS_MAX_STEPS",
+            "ALFRED_MAX_STEPS",
             settings.max_steps.map(|steps| steps.to_string()),
         )
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(8)
         .clamp(1, 24),
-        site_url: value("JARVIS_SITE_URL", settings.site_url.clone()),
+        site_url: value("ALFRED_SITE_URL", settings.site_url.clone()),
         stt_provider: SttProvider::from_value(value(
-            "JARVIS_STT_PROVIDER",
+            "ALFRED_STT_PROVIDER",
             settings.stt_provider.clone(),
         )),
-        whisper_bin: value("JARVIS_WHISPER_BIN", settings.whisper_bin.clone()),
-        whisper_model: value("JARVIS_WHISPER_MODEL", settings.whisper_model.clone()),
-        stt_model: value("JARVIS_STT_MODEL", settings.stt_model.clone()),
-        stt_base_url: value("JARVIS_STT_BASE_URL", settings.stt_base_url.clone())
+        whisper_bin: value("ALFRED_WHISPER_BIN", settings.whisper_bin.clone()),
+        whisper_model: value("ALFRED_WHISPER_MODEL", settings.whisper_model.clone()),
+        stt_model: value("ALFRED_STT_MODEL", settings.stt_model.clone()),
+        stt_base_url: value("ALFRED_STT_BASE_URL", settings.stt_base_url.clone())
             .map(|value| value.trim_end_matches('/').to_string()),
-        stt_api_key: value("JARVIS_STT_API_KEY", settings.stt_api_key.clone()),
+        stt_api_key: value("ALFRED_STT_API_KEY", settings.stt_api_key.clone()),
         fallback_base_url: value(
-            "JARVIS_FALLBACK_BASE_URL",
+            "ALFRED_FALLBACK_BASE_URL",
             settings.fallback_base_url.clone(),
         )
         .map(|value| value.trim_end_matches('/').to_string()),
-        fallback_model: value("JARVIS_FALLBACK_MODEL", settings.fallback_model.clone()),
-        fallback_api_key: value("JARVIS_FALLBACK_API_KEY", settings.fallback_api_key.clone()),
+        fallback_model: value("ALFRED_FALLBACK_MODEL", settings.fallback_model.clone()),
+        fallback_api_key: value("ALFRED_FALLBACK_API_KEY", settings.fallback_api_key.clone()),
         speak: enabled(value(
-            "JARVIS_SPEAK",
+            "ALFRED_SPEAK",
             settings.speak.map(|on| on.to_string()),
         )),
         vision: enabled(value(
-            "JARVIS_VISION",
+            "ALFRED_VISION",
             settings.vision.map(|on| on.to_string()),
         )),
-        voice: value("JARVIS_VOICE", settings.voice.clone()).unwrap_or_default(),
+        voice: value("ALFRED_VOICE", settings.voice.clone()).unwrap_or_default(),
         speech_rate: value(
-            "JARVIS_SPEECH_RATE",
+            "ALFRED_SPEECH_RATE",
             settings.speech_rate.map(|rate| rate.to_string()),
         )
         .and_then(|rate| rate.parse::<i32>().ok())
@@ -487,7 +501,7 @@ pub fn env_locked_names() -> Vec<&'static str> {
 }
 
 pub fn settings_path() -> Result<PathBuf> {
-    Ok(jarvis_dir()?.join("settings.json"))
+    Ok(alfred_dir()?.join("settings.json"))
 }
 
 pub fn load_settings() -> Result<Settings> {
@@ -527,15 +541,27 @@ fn write_settings_at(path: &Path, settings: &Settings) -> Result<()> {
     std::fs::write(path, text).with_context(|| format!("could not write {}", path.display()))
 }
 
-/// `~/Jarvis` - workspace, audit log and settings live here.
-pub fn jarvis_dir() -> Result<PathBuf> {
+/// `~/Alfred` - workspace, audit log and settings live here. An existing
+/// `~/Jarvis` is kept so its settings, transcript and approvals survive the
+/// rename; only a fresh install creates `~/Alfred`.
+pub fn alfred_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("could not locate the home directory")?;
-    let dir = home.join("Jarvis");
+    let dir = dir_for_home(&home);
     std::fs::create_dir_all(&dir).with_context(|| format!("could not create {}", dir.display()))?;
     Ok(dir)
 }
 
-/// Parse a base URL for host checks; `JARVIS_BASE_URL` is validated at load, so
+fn dir_for_home(home: &Path) -> PathBuf {
+    let current = home.join("Alfred");
+    let legacy = home.join("Jarvis");
+    if current.exists() || !legacy.exists() {
+        current
+    } else {
+        legacy
+    }
+}
+
+/// Parse a base URL for host checks; `ALFRED_BASE_URL` is validated at load, so
 /// this only fails for hand-built configs.
 fn endpoint(base_url: &str) -> url::Url {
     url::Url::parse(base_url).unwrap_or_else(|_| url::Url::parse("http://invalid").unwrap())
@@ -549,16 +575,18 @@ fn is_loopback(base_url: &str) -> bool {
     )
 }
 
-/// Read a variable, trimmed, treating an empty value as unset.
+/// Read a variable, trimmed, treating an empty value as unset. The old name is
+/// accepted too, so a field set in an existing `.env` is still shown read-only.
 fn optional_env(name: &str) -> Option<String> {
     env::var(name)
+        .or_else(|_| env::var(legacy_name(name)))
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
 
 pub fn audit_log_path() -> Result<PathBuf> {
-    Ok(jarvis_dir()?.join("audit.log"))
+    Ok(alfred_dir()?.join("audit.log"))
 }
 
 /// Resolve `candidate` inside `workspace`, refusing anything that escapes it.
@@ -636,7 +664,7 @@ mod tests {
 
     #[test]
     fn new_files_are_allowed_when_the_workspace_is_not_canonicalized() {
-        // The tools receive `Config::workspace` (e.g. `~/Jarvis/workspace`),
+        // The tools receive `Config::workspace` (e.g. `~/Alfred/workspace`),
         // which is not canonical, while `canonicalize` on Windows returns a
         // `\\\\?\\` path. Both must still agree on what is inside the workspace.
         let dir = tempfile::tempdir().unwrap();
@@ -648,7 +676,7 @@ mod tests {
     #[test]
     fn workspace_jail_works_before_the_directory_exists() {
         // A missing workspace must not silently block every file tool.
-        let root = Path::new("/tmp/jarvis-definitely-not-created/ws");
+        let root = Path::new("/tmp/alfred-definitely-not-created/ws");
         assert!(resolve_in_workspace(root, "notes.txt").is_some());
         assert!(resolve_in_workspace(root, "../escape.txt").is_none());
     }
@@ -672,7 +700,7 @@ mod tests {
         };
         assert!(!resolve_with(&off, |_| None).vision);
         assert!(
-            resolve_with(&off, |name| (name == "JARVIS_VISION")
+            resolve_with(&off, |name| (name == "ALFRED_VISION")
                 .then(|| "on".to_string()))
             .vision,
             "the environment wins over the saved file"
@@ -762,7 +790,7 @@ mod tests {
         );
         assert_eq!(
             resolve_with(&settings, |name| {
-                (name == "JARVIS_STT_PROVIDER").then(|| "model".to_string())
+                (name == "ALFRED_STT_PROVIDER").then(|| "model".to_string())
             })
             .stt_provider,
             SttProvider::Model,
@@ -904,7 +932,7 @@ mod tests {
         };
 
         let from_env = resolve_with(&settings, |name| {
-            (name == "JARVIS_MODEL").then(|| "env-model".to_string())
+            (name == "ALFRED_MODEL").then(|| "env-model".to_string())
         });
         assert_eq!(from_env.model, "env-model");
 
@@ -948,5 +976,37 @@ mod tests {
         );
         assert!(config.is_local());
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn legacy_environment_names_still_work() {
+        let settings = Settings {
+            model: Some("saved-model".into()),
+            ..Settings::default()
+        };
+
+        let from_legacy = resolve_with(&settings, |name| {
+            (name == "JARVIS_MODEL").then(|| "old-env-model".to_string())
+        });
+        assert_eq!(from_legacy.model, "old-env-model");
+
+        let both = resolve_with(&settings, |name| match name {
+            "ALFRED_MODEL" => Some("new-env-model".into()),
+            "JARVIS_MODEL" => Some("old-env-model".into()),
+            _ => None,
+        });
+        assert_eq!(both.model, "new-env-model", "the new name wins");
+    }
+
+    #[test]
+    fn an_existing_legacy_directory_is_kept() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(dir_for_home(home.path()), home.path().join("Alfred"));
+
+        std::fs::create_dir(home.path().join("Jarvis")).unwrap();
+        assert_eq!(dir_for_home(home.path()), home.path().join("Jarvis"));
+
+        std::fs::create_dir(home.path().join("Alfred")).unwrap();
+        assert_eq!(dir_for_home(home.path()), home.path().join("Alfred"));
     }
 }

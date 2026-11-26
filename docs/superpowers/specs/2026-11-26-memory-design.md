@@ -2,12 +2,12 @@
 
 **Date:** 2026-11-26
 **Status:** approved for implementation
-**Scope:** three files under `~/Jarvis/`, one new tool, one new chip button, two panel
+**Scope:** three files under `~/Alfred/`, one new tool, one new chip button, two panel
 buttons. No new crates, no new configuration, nothing leaves the machine.
 
 ## Why
 
-Jarvis forgets everything. Closing the island drops the visible conversation; rebuilding the
+Alfred forgets everything. Closing the island drops the visible conversation; rebuilding the
 runtime (which a settings save does) throws away the `Agent` and with it the model's history,
 mid-session. It also re-learns nothing: every "open Spotify" raises an Allow chip forever, and
 anything you tell it about yourself has to be repeated next time.
@@ -19,16 +19,16 @@ Three small pieces fix that, and each is independently testable.
 | Decision | Choice | Why |
 |---|---|---|
 | What a restart restores | The island's last 40 turns, and the last 12 **text** messages replayed to the model | A follow-up after a restart should make sense. Tool calls, results and screenshots are deliberately not stored: replaying them out of order breaks provider payloads, and a stale screenshot is worse than none. |
-| Where the transcript lives | `~/Jarvis/transcript.json` | Same place and trust level as `settings.json` and `audit.log`. Plain JSON so it can be read or deleted by hand. |
-| Facts | `~/Jarvis/memory.md`, written by a `remember` tool | The model is the thing that hears "I use VS Code"; a panel-only editor would mean retyping what it just learned. Markdown so the file stays human-readable. |
+| Where the transcript lives | `~/Alfred/transcript.json` | Same place and trust level as `settings.json` and `audit.log`. Plain JSON so it can be read or deleted by hand. |
+| Facts | `~/Alfred/memory.md`, written by a `remember` tool | The model is the thing that hears "I use VS Code"; a panel-only editor would mean retyping what it just learned. Markdown so the file stays human-readable. |
 | Fact size | 500 chars per fact, 1 500 chars injected | A facts file that grows without bound would quietly eat the context window. The file keeps everything; only the injection is capped, newest first. |
-| Approvals | `~/Jarvis/approvals.json`, only for `open_app`, `close_app`, `focus_window` | These are the Confirm tools with a stable target. `click`, `type_text`, `press_keys` and `write_file` have no identity to remember, and `clipboard_get` has no target at all — it asks every time. |
+| Approvals | `~/Alfred/approvals.json`, only for `open_app`, `close_app`, `focus_window` | These are the Confirm tools with a stable target. `click`, `type_text`, `press_keys` and `write_file` have no identity to remember, and `clipboard_get` has no target at all — it asks every time. |
 | How it is granted | A third chip button, "Always allow" | Explicit. Silently remembering every Allow would broaden permissions without the user choosing to. |
 | Revoking | Two panel buttons and the file itself | A permission you cannot see or drop is not a permission, it is a bug. |
 
 ## Architecture
 
-### `crates/jarvis-core/src/memory.rs` (new)
+### `crates/alfred-core/src/memory.rs` (new)
 
 The only module that reads or writes these files. No Tauri, no platform, so it tests on Linux.
 
@@ -36,7 +36,7 @@ The only module that reads or writes these files. No Tauri, no platform, so it t
 pub struct Memory { dir: PathBuf }
 
 impl Memory {
-    /// `~/Jarvis` in the app; a tempdir in tests.
+    /// `~/Alfred` in the app; a tempdir in tests.
     pub fn new(dir: impl Into<PathBuf>) -> Self;
 
     /// Oldest first, at most TRANSCRIPT_TURNS, text only.
@@ -74,7 +74,7 @@ pub const REMEMBERABLE: [&str; 3] = ["open_app", "close_app", "focus_window"];
 ### Agent
 
 - `Agent::new(config, platform, completer, audit, emit, memory)` — one more argument, loaded
-  from `jarvis_dir()` by the shell and from a tempdir by tests.
+  from `alfred_dir()` by the shell and from a tempdir by tests.
 - On construction it replays `transcript()[-(REPLAYED_MESSAGES)..]` as `ChatMessage::user` /
   `ChatMessage::assistant` text. Nothing is emitted to the island from this; the island asks
   for the transcript itself.
@@ -98,7 +98,7 @@ memory is the same `target_name` the policy already extracts — exported as
 
 ### Shell (`src-tauri/src/lib.rs`)
 
-- `Runtime::build` passes `Memory::new(config::jarvis_dir()?)` to `Agent::new`.
+- `Runtime::build` passes `Memory::new(config::alfred_dir()?)` to `Agent::new`.
 - New commands: `history() -> Vec<TurnView>`, `forget_history()`, `approvals() ->
   Vec<ApprovalView>`, `forget_approvals()`.
 - `confirm(id, allow, remember: Option<bool>)`; `None` means false, so an older UI still works.
@@ -137,7 +137,7 @@ remember({text}) ──▶ memory.md ──▶ next system_prompt
 
 ## Testing
 
-`cargo test -p jarvis-core` only; no Tauri, no network, no real home directory (every test uses
+`cargo test -p alfred-core` only; no Tauri, no network, no real home directory (every test uses
 `tempfile::tempdir()`).
 
 | Test | Asserts |

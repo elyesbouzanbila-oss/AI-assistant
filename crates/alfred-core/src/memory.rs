@@ -1,7 +1,7 @@
-//! What Jarvis keeps between turns and between runs: the conversation
+//! What Alfred keeps between turns and between runs: the conversation
 //! transcript, facts about the user, and approvals already granted.
 //!
-//! Three plaintext files in one directory — `~/Jarvis` in the app, a temporary
+//! Three plaintext files in one directory — `~/Alfred` in the app, a temporary
 //! directory in tests. Nothing here talks to the network, the model or the OS,
 //! and every read of a missing or damaged file is an empty value rather than an
 //! error: memory should never be the reason a turn fails.
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn a_missing_directory_is_an_empty_memory() {
-        let memory = Memory::new(std::env::temp_dir().join("jarvis-memory-that-does-not-exist"));
+        let memory = Memory::new(std::env::temp_dir().join("alfred-memory-that-does-not-exist"));
         assert!(memory.transcript().is_empty());
         assert!(memory.facts().is_empty());
         assert!(memory.approvals().is_empty());

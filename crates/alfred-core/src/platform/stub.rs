@@ -11,7 +11,7 @@ pub struct UnsupportedPlatform;
 fn unsupported() -> anyhow::Error {
     anyhow::anyhow!(
         "desktop control is only implemented for Windows in this build; \
-         run Jarvis on Windows or add a platform backend for this OS"
+         run Alfred on Windows or add a platform backend for this OS"
     )
 }
 

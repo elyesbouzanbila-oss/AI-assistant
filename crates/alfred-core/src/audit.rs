@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-/// Append-only JSONL record of everything Jarvis did, so the user can always
+/// Append-only JSONL record of everything Alfred did, so the user can always
 /// reconstruct what happened on their machine.
 pub struct Audit {
     path: Option<PathBuf>,

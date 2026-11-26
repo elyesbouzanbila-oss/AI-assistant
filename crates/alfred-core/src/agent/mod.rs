@@ -477,7 +477,7 @@ fn system_prompt(config: &Config, platform: &str, facts: &str) -> String {
     };
 
     format!(
-        r#"You are Jarvis, the user's desktop assistant: you run on this machine and operate it for them.
+        r#"You are Alfred, the user's desktop assistant: you run on this machine and operate it for them.
 
 Who you are:
 - Calm, dry and efficient, like a good ship's computer. Competent, never flattering, never eager to please.
@@ -962,10 +962,10 @@ mod tests {
 
     #[test]
     fn system_prompt_mentions_the_platform_and_workspace() {
-        let config = Config::new("https://x.test/v1", "k", "m", "/tmp/jarvis-ws");
+        let config = Config::new("https://x.test/v1", "k", "m", "/tmp/alfred-ws");
         let prompt = system_prompt(&config, "Windows", "");
         assert!(prompt.contains("Windows"));
-        assert!(prompt.contains("/tmp/jarvis-ws"));
+        assert!(prompt.contains("/tmp/alfred-ws"));
         assert!(prompt.contains("screenshot"));
         assert!(prompt.contains("desktop assistant"));
         assert!(prompt.to_lowercase().contains("one short sentence"));
@@ -1203,7 +1203,7 @@ mod tests {
 
     #[test]
     fn facts_reach_the_system_prompt() {
-        let config = Config::new("https://x.test/v1", "k", "m", "/tmp/jarvis-ws");
+        let config = Config::new("https://x.test/v1", "k", "m", "/tmp/alfred-ws");
         let with = system_prompt(&config, "Windows", "- prefers dark mode");
         assert!(with.contains("prefers dark mode"));
         let without = system_prompt(&config, "Windows", "");

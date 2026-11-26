@@ -95,13 +95,13 @@ pub fn evaluate(tool: &str, args: &Value, workspace: &Path) -> Decision {
         if matches!(tool, "read_file" | "list_files")
             && resolve_in_workspace(workspace, target).is_none()
         {
-            return Decision::new(Verdict::Blocked, "path is outside the Jarvis workspace");
+            return Decision::new(Verdict::Blocked, "path is outside the Alfred workspace");
         }
         return Decision::new(Verdict::Safe, "needs no approval");
     }
 
     if tool == "write_file" && resolve_in_workspace(workspace, str_arg(args, "path")).is_none() {
-        return Decision::new(Verdict::Blocked, "path is outside the Jarvis workspace");
+        return Decision::new(Verdict::Blocked, "path is outside the Alfred workspace");
     }
 
     if let Some(target) = target(tool, args) {
@@ -145,7 +145,7 @@ mod tests {
     use serde_json::json;
 
     fn workspace() -> &'static Path {
-        Path::new("/tmp/jarvis-ws")
+        Path::new("/tmp/alfred-ws")
     }
 
     #[test]

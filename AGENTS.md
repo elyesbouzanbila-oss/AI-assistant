@@ -1,30 +1,30 @@
 # AGENTS.md
 
-Instructions for coding agents working on Jarvis: a Windows desktop assistant that
+Instructions for coding agents working on Alfred: a Windows desktop assistant that
 sees the screen and operates the machine. Rust core, Tauri 2 shell, React island UI.
 
 ## Layout
 
 ```
-crates/jarvis-core/   agent loop, LLM client, tools, policy, OS bridge — no Tauri dependency
+crates/alfred-core/   agent loop, LLM client, tools, policy, OS bridge — no Tauri dependency
 src-tauri/            Tauri shell: window, commands, events, global shortcut
 src/renderer/         island UI (React + CSS), with a scripted browser demo mode
 ```
 
-`jarvis-core` must stay independent of Tauri so it can be tested on any platform.
+`alfred-core` must stay independent of Tauri so it can be tested on any platform.
 Everything that touches the OS sits behind the `Platform` trait
-(`crates/jarvis-core/src/platform/mod.rs`); a new OS is a new backend file, not a rewrite.
+(`crates/alfred-core/src/platform/mod.rs`); a new OS is a new backend file, not a rewrite.
 
 ### Where things live
 
 | Change | File |
 |---|---|
-| Assistant tone, rules, capabilities | `system_prompt()` in `crates/jarvis-core/src/agent/mod.rs` |
-| Env/settings.json parsing, validation, key resolution | `crates/jarvis-core/src/config.rs` |
-| Request shape, streaming, transcription | `crates/jarvis-core/src/llm.rs` |
-| Tool schemas, execution, chip summaries | `crates/jarvis-core/src/tools/mod.rs` |
-| Transcript, facts, remembered approvals | `crates/jarvis-core/src/memory.rs` |
-| Approval rules, blocked apps | `crates/jarvis-core/src/policy.rs` |
+| Assistant tone, rules, capabilities | `system_prompt()` in `crates/alfred-core/src/agent/mod.rs` |
+| Env/settings.json parsing, validation, key resolution | `crates/alfred-core/src/config.rs` |
+| Request shape, streaming, transcription | `crates/alfred-core/src/llm.rs` |
+| Tool schemas, execution, chip summaries | `crates/alfred-core/src/tools/mod.rs` |
+| Transcript, facts, remembered approvals | `crates/alfred-core/src/memory.rs` |
+| Approval rules, blocked apps | `crates/alfred-core/src/policy.rs` |
 | OS behaviour (Windows) | `platform/{win,recorder,input,combo}.rs` |
 | Starting the local fallback (WSL + Ollama) | `src-tauri/src/ollama.rs` |
 | Speaking the answer (SAPI) | `src-tauri/src/speech.rs` |
@@ -33,7 +33,7 @@ Everything that touches the OS sits behind the `Platform` trait
 
 ## Configuration
 
-Resolved by `Config::load()` from the environment and from `~/Jarvis/settings.json`.
+Resolved by `Config::load()` from the environment and from `~/Alfred/settings.json`.
 The island's settings panel (gear icon in the open state) writes that file and rebuilds
 the runtime, so an endpoint, model or key change applies without a restart. **Editing
 `.env` still needs a restart.**
@@ -44,38 +44,43 @@ existing setup working, and the panel shows those fields read-only with an `env`
 `resolve_with` takes the environment lookup as an argument so precedence stays testable
 without mutating the real environment; keep that seam.
 
+The `ALFRED_*` names replaced `JARVIS_*`: both `resolve_with` and `optional_env` try the new
+name first and fall back to the old, so an existing `.env` or shell setup still works. In the
+same spirit `alfred_dir` keeps using an existing `~/Jarvis` folder instead of creating a fresh
+`~/Alfred`, so settings, transcript and approvals survive the rename. Keep both fallbacks.
+
 | Variable | Default | Notes |
 |---|---|---|
-| `JARVIS_BASE_URL` | `https://api.openai.com/v1` | any OpenAI-compatible endpoint |
-| `JARVIS_API_KEY` | — | required for remote endpoints, optional on loopback |
-| `JARVIS_MODEL` | `gpt-4o-mini` | must support tool calling **and** image input |
-| `JARVIS_VISION` | `true` | offers the `screenshot` tool; `false` for a model that rejects images |
-| `JARVIS_MAX_STEPS` | `8` | clamped to 1..=24 |
-| `JARVIS_SITE_URL` | unset | OpenRouter attribution only, never sent elsewhere |
-| `JARVIS_STT_PROVIDER` | `model` | `model`, `windows` (SAPI) or `whisper` (whisper.cpp in WSL) |
-| `JARVIS_WHISPER_BIN` | `whisper-cli` | command or Linux path to whisper-cli inside WSL |
-| `JARVIS_WHISPER_MODEL` | — | required with the `whisper` provider; Linux path to a GGUF model |
-| `JARVIS_STT_MODEL` | `JARVIS_MODEL` | voice; must accept audio input |
-| `JARVIS_STT_BASE_URL` | `JARVIS_BASE_URL` | separate voice endpoint |
-| `JARVIS_STT_API_KEY` | — | required when `JARVIS_STT_BASE_URL` differs |
-| `JARVIS_FALLBACK_BASE_URL` | unset | second endpoint, tried when the primary fails |
-| `JARVIS_FALLBACK_MODEL` | unset | required with the URL above; either missing disables the fallback |
-| `JARVIS_FALLBACK_API_KEY` | — | only for a remote fallback; loopback needs none |
-| `JARVIS_SPEAK` | `true` | reads the answer aloud for turns that started by dictation |
-| `JARVIS_VOICE` | unset | SAPI voice name; blank means the system default |
-| `JARVIS_SPEECH_RATE` | `0` | clamped to -10..=10 |
+| `ALFRED_BASE_URL` | `https://api.openai.com/v1` | any OpenAI-compatible endpoint |
+| `ALFRED_API_KEY` | — | required for remote endpoints, optional on loopback |
+| `ALFRED_MODEL` | `gpt-4o-mini` | must support tool calling **and** image input |
+| `ALFRED_VISION` | `true` | offers the `screenshot` tool; `false` for a model that rejects images |
+| `ALFRED_MAX_STEPS` | `8` | clamped to 1..=24 |
+| `ALFRED_SITE_URL` | unset | OpenRouter attribution only, never sent elsewhere |
+| `ALFRED_STT_PROVIDER` | `model` | `model`, `windows` (SAPI) or `whisper` (whisper.cpp in WSL) |
+| `ALFRED_WHISPER_BIN` | `whisper-cli` | command or Linux path to whisper-cli inside WSL |
+| `ALFRED_WHISPER_MODEL` | — | required with the `whisper` provider; Linux path to a GGUF model |
+| `ALFRED_STT_MODEL` | `ALFRED_MODEL` | voice; must accept audio input |
+| `ALFRED_STT_BASE_URL` | `ALFRED_BASE_URL` | separate voice endpoint |
+| `ALFRED_STT_API_KEY` | — | required when `ALFRED_STT_BASE_URL` differs |
+| `ALFRED_FALLBACK_BASE_URL` | unset | second endpoint, tried when the primary fails |
+| `ALFRED_FALLBACK_MODEL` | unset | required with the URL above; either missing disables the fallback |
+| `ALFRED_FALLBACK_API_KEY` | — | only for a remote fallback; loopback needs none |
+| `ALFRED_SPEAK` | `true` | reads the answer aloud for turns that started by dictation |
+| `ALFRED_VOICE` | unset | SAPI voice name; blank means the system default |
+| `ALFRED_SPEECH_RATE` | `0` | clamped to -10..=10 |
 
-Every value except `JARVIS_SITE_URL` can also be set in the settings panel; the file it writes is
-`~/Jarvis/settings.json` (pretty-printed JSON, gitignored by location, not encrypted).
-`JARVIS_SITE_URL` is the one value the panel does not expose.
+Every value except `ALFRED_SITE_URL` can also be set in the settings panel; the file it writes is
+`~/Alfred/settings.json` (pretty-printed JSON, gitignored by location, not encrypted).
+`ALFRED_SITE_URL` is the one value the panel does not expose.
 
 Resolution rules that are easy to break:
 
 - **Loopback needs no key.** `localhost`, `127.0.0.1`, `::1` (Ollama and friends) pass
   validation with an empty key, and `LlmClient` then sends no `Authorization` header.
   Do not reintroduce a blanket "key required" check.
-- **The chat key never crosses hosts.** A distinct `JARVIS_STT_BASE_URL` demands its own
-  `JARVIS_STT_API_KEY`; `Config::transcription_key` returns empty rather than reuse the
+- **The chat key never crosses hosts.** A distinct `ALFRED_STT_BASE_URL` demands its own
+  `ALFRED_STT_API_KEY`; `Config::transcription_key` returns empty rather than reuse the
   chat key, and validation explains why.
 - **The fallback is one retry, not a loop.** `LlmClient::complete` tries `chat`, then the
   fallback once, then — if a `wake` hook is installed — wakes the local model and tries
@@ -88,7 +93,7 @@ Resolution rules that are easy to break:
   shell would silently lose the fallback and wake hook for every turn.
 - **Only loopback fallbacks are started.** `ollama::ensure` parses the endpoint, refuses
   anything that is not `localhost` / `127.0.0.1` / `::1`, and validates the model name
-  before interpolating it into the `wsl.exe` command — the same rule as `JARVIS_ARG`:
+  before interpolating it into the `wsl.exe` command — the same rule as `ALFRED_ARG`:
   nothing model-supplied reaches a shell.
 - **Speech text never becomes script.** `speech::to_speech` decides *what* is read: code
   fences, inline code, URLs and markdown are dropped, short answers are read verbatim and
@@ -104,7 +109,7 @@ Resolution rules that are easy to break:
 - **Chat and voice are separate `Target`s** in `LlmClient`, both routed through one
   `request()`. Voice sends the WAV as an `input_audio` chat part, not to
   `/audio/transcriptions` — so a Whisper-only service will not work by setting a URL.
-  `JARVIS_STT_PROVIDER=windows` bypasses that target entirely: `platform/transcribe.rs`
+  `ALFRED_STT_PROVIDER=windows` bypasses that target entirely: `platform/transcribe.rs`
   stages the WAV and runs `System.Speech` in a hidden PowerShell. `whisper` stages the
   same WAV, translates its path to `/mnt/c/...`, and calls `wsl.exe -e whisper-cli ...`
   with Linux paths — no shell, no model output interpolated into a command. Both paths
@@ -125,8 +130,8 @@ Resolution rules that are easy to break:
 | `npm run app` | `tauri dev`: vite + the app window, using `.env` |
 | `npm run dev` | vite only — browser demo mode, no desktop control |
 | `npm run build` | `tsc --noEmit && vite build` |
-| `cargo test -p jarvis-core` | the test suite (platform-independent) |
-| `cargo clippy -p jarvis-core --all-targets -- -D warnings` | lints, warnings are errors |
+| `cargo test -p alfred-core` | the test suite (platform-independent) |
+| `cargo clippy -p alfred-core --all-targets -- -D warnings` | lints, warnings are errors |
 | `cargo build --workspace` | **the only command that compiles the Windows-only code** |
 | `npm run bundle` | release installers in `target/release/bundle/` |
 
@@ -148,7 +153,7 @@ actual executable is the deliverable.
   `agent::tests::system_prompt_mentions_the_platform_and_workspace` asserts that
   framing and the one-sentence budget, so change both together.
 - **OS actions go through PowerShell**, and model-supplied text is passed in the
-  `JARVIS_ARG` environment variable — never interpolated into script source. A
+  `ALFRED_ARG` environment variable — never interpolated into script source. A
   prompt injection must not be able to become a command injection.
 - Hidden PowerShell windows use `CREATE_NO_WINDOW` (`0x0800_0000`).
 - **PowerShell failures must be printed on stdout.** `stderr` is piped but never
@@ -163,8 +168,8 @@ actual executable is the deliverable.
   explicit Allow, blocked app categories stay blocked, unknown tools are refused.
   `clipboard_get` is the one safe-looking read that still needs an Allow: password
   managers put secrets on the clipboard, and the text goes to the model.
-  `clipboard_set` needs none, and its text travels in `JARVIS_ARG` like everything else.
-- Memory (`memory.rs`) is plain text under `jarvis_dir()`, and every read of a missing
+  `clipboard_set` needs none, and its text travels in `ALFRED_ARG` like everything else.
+- Memory (`memory.rs`) is plain text under `alfred_dir()`, and every read of a missing
   or corrupt file is empty rather than an error: memory must never fail a turn. The
   transcript stores **text only**; never replay stored tool calls, images or results to
   a provider. Keep the caps (`TRANSCRIPT_TURNS`, `REPLAYED_MESSAGES`, `FACT_CHARS`,
@@ -205,7 +210,7 @@ actual executable is the deliverable.
 
 ## Tests and lint
 
-- `cargo test -p jarvis-core` must stay green. A behaviour fix deserves a test
+- `cargo test -p alfred-core` must stay green. A behaviour fix deserves a test
   that **fails without the fix** — check that it does before keeping it.
 - Never silence a check to make it pass: no `#[allow(dead_code)]` on live code,
   no weakened assertions, no skipped tests. If clippy complains about an argument
@@ -213,8 +218,8 @@ actual executable is the deliverable.
 
 ## Secrets
 
-`~/Jarvis/settings.json` (written by the settings panel) and `.env` hold
-`JARVIS_API_KEY` and `JARVIS_STT_API_KEY`. Both files are read by the Rust process only:
+`~/Alfred/settings.json` (written by the settings panel) and `.env` hold
+`ALFRED_API_KEY` and `ALFRED_STT_API_KEY`. Both files are read by the Rust process only:
 never log the keys, never send them to the webview, never write them to the audit log,
 and never print them in chat or commit them.
 `.env.example` is the template, and `.env` must never be copied into one.

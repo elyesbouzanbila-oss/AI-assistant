@@ -2,20 +2,20 @@
 
 **Date:** 2026-11-26
 **Status:** approved for implementation
-**Scope:** five tools that make multi-step desktop work possible with the model Jarvis already
+**Scope:** five tools that make multi-step desktop work possible with the model Alfred already
 has. No new crates, no new configuration, no change to the safety model beyond one new
 confirmation.
 
 ## Why
 
-Jarvis can open, click and type, but it cannot pace itself or look around, and that is where
+Alfred can open, click and type, but it cannot pace itself or look around, and that is where
 real tasks break:
 
 - Nothing lets it wait for a window to draw, so every second step is a guess about timing.
   "Open Discord and type this" fails because the click lands on a window that has not appeared.
 - It can click an item in a list but never move through the list — `click` is absolute
   coordinates and there is no wheel input.
-- The file tools read and write a path but cannot discover one. `~/Jarvis/workspace` is
+- The file tools read and write a path but cannot discover one. `~/Alfred/workspace` is
   invisible to the model unless it already knows the filename.
 - "Take what I copied and put it in Notepad" means retyping text the user already has.
 
@@ -29,11 +29,11 @@ they remove the places where the only remaining strategy is guessing.
 | `wait` modes | Fixed milliseconds **and** wait-for-window | A blind sleep is only as good as the model's guess. Waiting for a title is a fact, not a guess, and it is what makes `open_app` followed by `click` reliable. |
 | Where window waiting lives | `tools` polling `Platform::list_windows`, every 150 ms | `list_windows` already exists on every backend and already returns titles. A new trait method would duplicate it and need a stub plus a Windows implementation for no gain. |
 | `scroll` | `SendInput` wheel events at the pointer, optionally moved to `x,y` first | Same mechanism as `click`, which is already trusted. `press_keys("pagedown")` scrolls the *focused* pane, which is not the pane being pointed at. |
-| Clipboard transport | Two hidden-PowerShell calls, text through `JARVIS_ARG` | Matches the window-control pattern and keeps the existing rule: model-supplied text never becomes script source. |
+| Clipboard transport | Two hidden-PowerShell calls, text through `ALFRED_ARG` | Matches the window-control pattern and keeps the existing rule: model-supplied text never becomes script source. |
 | `clipboard_get` verdict | **Confirm** (Allow chip) | The clipboard is where password managers and copy-password buttons put secrets. A read that runs without a click is a quiet exfiltration path to a remote model. |
 | `clipboard_set` verdict | Safe (no chip) | It changes what will be pasted, not the machine; the user asked for a copy and sees the chip text saying so. |
 | `list_files` reach | Workspace only, one level | The file jail is absolute (`resolve_in_workspace`). Discovery must not become a way around it. |
-| Verification | Not in this spec | Automatic screenshots after every mutation cost an image per step and need a vision model; `JARVIS_VISION=false` must stay a fully working configuration. |
+| Verification | Not in this spec | Automatic screenshots after every mutation cost an image per step and need a vision model; `ALFRED_VISION=false` must stay a fully working configuration. |
 
 ## Architecture
 
@@ -113,7 +113,7 @@ Schema count goes from 11 to 16.
   `try/catch` that writes `$_.Exception.Message` to stdout, per the existing PowerShell rule.
   Capped at 64 KB (`MAX_READ_BYTES`, the same limit as `read_file`). Empty or whitespace-only
   returns `"(the clipboard is empty)"`.
-- **Write** (`clipboard_set`): `Set-Clipboard -Value $env:JARVIS_ARG`. Returns
+- **Write** (`clipboard_set`): `Set-Clipboard -Value $env:ALFRED_ARG`. Returns
   `"copied 84 characters"`.
 - Neither path ever puts text into the script source.
 
@@ -187,7 +187,7 @@ model → tools::execute → policy::evaluate ──Confirm──▶ island Allo
 
 ## Testing
 
-`cargo test -p jarvis-core`, no Windows and no network needed.
+`cargo test -p alfred-core`, no Windows and no network needed.
 
 | Test | Asserts |
 |---|---|
@@ -199,7 +199,7 @@ model → tools::execute → policy::evaluate ──Confirm──▶ island Allo
 | `list_files_is_jailed_to_the_workspace` | `../` and absolute paths are refused; a `tempdir` listing works |
 | `list_files_caps_the_listing` | 250 files yield 200 entries plus an "omitted" note |
 | `clipboard_get_needs_confirmation` | policy verdict is Confirm, not Safe |
-| `clipboard_set_is_safe_and_never_scripts` | verdict Safe; the command argument is `JARVIS_ARG`, and the text appears nowhere in it |
+| `clipboard_set_is_safe_and_never_scripts` | verdict Safe; the command argument is `ALFRED_ARG`, and the text appears nowhere in it |
 | `scroll_is_a_confirmation` | verdict Confirm |
 
 The Windows backends (`SendInput` wheel, `Get-Clipboard`, `Set-Clipboard`) are verified by hand
@@ -211,7 +211,7 @@ builds them but does not drive the desktop.
 - `README.md`: five rows in the "What it can do" table, and the safety section gains one line
   about clipboard reads needing approval.
 - `AGENTS.md`: the "OS actions go through PowerShell" area gains the clipboard rule (text in
-  `JARVIS_ARG`, never in the script), and the policy paragraph mentions the new verdict split.
+  `ALFRED_ARG`, never in the script), and the policy paragraph mentions the new verdict split.
 - `.env.example`: unchanged — nothing here is configurable.
 
 ## Out of scope

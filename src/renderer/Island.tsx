@@ -32,7 +32,7 @@ const COLLAPSE_MS = 2600;
 const HOVER_SETTLE_MS = 220;
 /** Absorbs a single synthetic leave without making the island flicker. */
 const CLOSE_DELAY_MS = 120;
-/** Matches `MAX_SECONDS` in crates/jarvis-core/src/platform/recorder.rs. */
+/** Matches `MAX_SECONDS` in crates/alfred-core/src/platform/recorder.rs. */
 const DICTATION_MAX_MS = 30_000;
 
 const PRESETS = [
@@ -548,7 +548,7 @@ export function Island() {
         <header className="bar" onClick={() => phase === "idle" && open()}>
           <div className="orb" data-state={phase} />
           <div className="title">
-            <span className="name">Jarvis</span>
+            <span className="name">Alfred</span>
             {phase !== "idle" && <span className="sub">{status}</span>}
           </div>
           {phase === "idle" && <span className="hint">Ctrl+Space</span>}
@@ -605,30 +605,30 @@ export function Island() {
                 ))}
               </div>
 
-              <Field label="Endpoint" locked={envLocked("JARVIS_BASE_URL")}>
+              <Field label="Endpoint" locked={envLocked("ALFRED_BASE_URL")}>
                 <input
                   value={form?.baseUrl ?? ""}
                   onChange={(event) => edit({ baseUrl: event.target.value })}
                   placeholder="https://openrouter.ai/api/v1"
                   spellCheck={false}
                   autoComplete="off"
-                  disabled={envLocked("JARVIS_BASE_URL")}
+                  disabled={envLocked("ALFRED_BASE_URL")}
                 />
               </Field>
 
               <div className="field-row">
-                <Field label="Model" locked={envLocked("JARVIS_MODEL")}>
+                <Field label="Model" locked={envLocked("ALFRED_MODEL")}>
                   <input
                     value={form?.model ?? ""}
                     onChange={(event) => edit({ model: event.target.value })}
                     placeholder="google/gemini-2.5-flash"
-                    list="jarvis-models"
+                    list="alfred-models"
                     spellCheck={false}
                     autoComplete="off"
-                    disabled={envLocked("JARVIS_MODEL")}
+                    disabled={envLocked("ALFRED_MODEL")}
                   />
                 </Field>
-                <Field label="Steps" locked={envLocked("JARVIS_MAX_STEPS")}>
+                <Field label="Steps" locked={envLocked("ALFRED_MAX_STEPS")}>
                   <input
                     type="number"
                     min={1}
@@ -642,12 +642,12 @@ export function Island() {
                         ),
                       })
                     }
-                    disabled={envLocked("JARVIS_MAX_STEPS")}
+                    disabled={envLocked("ALFRED_MAX_STEPS")}
                   />
                 </Field>
               </div>
 
-              <Field label="API key" locked={envLocked("JARVIS_API_KEY")}>
+              <Field label="API key" locked={envLocked("ALFRED_API_KEY")}>
                 <div className="field-with-action">
                   <input
                     type="password"
@@ -664,7 +664,7 @@ export function Island() {
                     }
                     autoComplete="off"
                     spellCheck={false}
-                    disabled={envLocked("JARVIS_API_KEY")}
+                    disabled={envLocked("ALFRED_API_KEY")}
                   />
                   {settings?.hasApiKey && !form?.clearApiKey && (
                     <button
@@ -685,14 +685,14 @@ export function Island() {
 
               <Field
                 label="Transcription"
-                locked={envLocked("JARVIS_STT_PROVIDER")}
+                locked={envLocked("ALFRED_STT_PROVIDER")}
               >
                 <select
                   value={form?.sttProvider ?? "model"}
                   onChange={(event) =>
                     edit({ sttProvider: event.target.value })
                   }
-                  disabled={envLocked("JARVIS_STT_PROVIDER")}
+                  disabled={envLocked("ALFRED_STT_PROVIDER")}
                 >
                   <option value="model">Voice model (audio input)</option>
                   <option value="windows">Windows speech recognition</option>
@@ -701,42 +701,42 @@ export function Island() {
               </Field>
 
               <div className="field-row voice">
-                <Field label="Whisper command" locked={envLocked("JARVIS_WHISPER_BIN")}>
+                <Field label="Whisper command" locked={envLocked("ALFRED_WHISPER_BIN")}>
                   <input
                     value={form?.whisperBin ?? ""}
                     onChange={(event) => edit({ whisperBin: event.target.value })}
                     placeholder="whisper-cli"
                     spellCheck={false}
                     autoComplete="off"
-                    disabled={envLocked("JARVIS_WHISPER_BIN")}
+                    disabled={envLocked("ALFRED_WHISPER_BIN")}
                   />
                 </Field>
-                <Field label="Whisper model" locked={envLocked("JARVIS_WHISPER_MODEL")}>
+                <Field label="Whisper model" locked={envLocked("ALFRED_WHISPER_MODEL")}>
                   <input
                     value={form?.whisperModel ?? ""}
                     onChange={(event) => edit({ whisperModel: event.target.value })}
                     placeholder="Linux path inside WSL"
                     spellCheck={false}
                     autoComplete="off"
-                    disabled={envLocked("JARVIS_WHISPER_MODEL")}
+                    disabled={envLocked("ALFRED_WHISPER_MODEL")}
                   />
                 </Field>
               </div>
 
               <div className="field-row voice">
-                <Field label="Voice model" locked={envLocked("JARVIS_STT_MODEL")}>
+                <Field label="Voice model" locked={envLocked("ALFRED_STT_MODEL")}>
                   <input
                     value={form?.sttModel ?? ""}
                     onChange={(event) => edit({ sttModel: event.target.value })}
                     placeholder="same as the model above"
                     spellCheck={false}
                     autoComplete="off"
-                    disabled={envLocked("JARVIS_STT_MODEL")}
+                    disabled={envLocked("ALFRED_STT_MODEL")}
                   />
                 </Field>
                 <Field
                   label="Voice endpoint"
-                  locked={envLocked("JARVIS_STT_BASE_URL")}
+                  locked={envLocked("ALFRED_STT_BASE_URL")}
                 >
                   <input
                     value={form?.sttBaseUrl ?? ""}
@@ -744,12 +744,12 @@ export function Island() {
                     placeholder="same as the endpoint above"
                     spellCheck={false}
                     autoComplete="off"
-                    disabled={envLocked("JARVIS_STT_BASE_URL")}
+                    disabled={envLocked("ALFRED_STT_BASE_URL")}
                   />
                 </Field>
               </div>
 
-              <Field label="Voice key" locked={envLocked("JARVIS_STT_API_KEY")}>
+              <Field label="Voice key" locked={envLocked("ALFRED_STT_API_KEY")}>
                 <div className="field-with-action">
                   <input
                     type="password"
@@ -766,7 +766,7 @@ export function Island() {
                     }
                     autoComplete="off"
                     spellCheck={false}
-                    disabled={envLocked("JARVIS_STT_API_KEY")}
+                    disabled={envLocked("ALFRED_STT_API_KEY")}
                   />
                   {settings?.hasSttApiKey && !form?.clearSttApiKey && (
                     <button
@@ -782,19 +782,19 @@ export function Island() {
               </Field>
 
               <div className="field-row voice">
-                <Field label="Voice name" locked={envLocked("JARVIS_VOICE")}>
+                <Field label="Voice name" locked={envLocked("ALFRED_VOICE")}>
                   <input
                     value={form?.voice ?? ""}
                     onChange={(event) => edit({ voice: event.target.value })}
                     placeholder="system default"
                     spellCheck={false}
                     autoComplete="off"
-                    disabled={envLocked("JARVIS_VOICE")}
+                    disabled={envLocked("ALFRED_VOICE")}
                   />
                 </Field>
                 <Field
                   label="Speech rate"
-                  locked={envLocked("JARVIS_SPEECH_RATE")}
+                  locked={envLocked("ALFRED_SPEECH_RATE")}
                 >
                   <input
                     type="number"
@@ -809,7 +809,7 @@ export function Island() {
                         ),
                       })
                     }
-                    disabled={envLocked("JARVIS_SPEECH_RATE")}
+                    disabled={envLocked("ALFRED_SPEECH_RATE")}
                   />
                 </Field>
               </div>
@@ -819,7 +819,7 @@ export function Island() {
                   type="checkbox"
                   checked={form?.speak ?? true}
                   onChange={(event) => edit({ speak: event.target.checked })}
-                  disabled={envLocked("JARVIS_SPEAK")}
+                  disabled={envLocked("ALFRED_SPEAK")}
                 />
                 <span>
                   Speak the answer <em>only when you dictated the request</em>
@@ -831,7 +831,7 @@ export function Island() {
                   type="checkbox"
                   checked={form?.vision ?? true}
                   onChange={(event) => edit({ vision: event.target.checked })}
-                  disabled={envLocked("JARVIS_VISION")}
+                  disabled={envLocked("ALFRED_VISION")}
                 />
                 <span>
                   See the screen <em>off for a model that rejects images</em>
@@ -845,7 +845,7 @@ export function Island() {
               <div className="field-row voice">
                 <Field
                   label="Fallback endpoint"
-                  locked={envLocked("JARVIS_FALLBACK_BASE_URL")}
+                  locked={envLocked("ALFRED_FALLBACK_BASE_URL")}
                 >
                   <input
                     value={form?.fallbackBaseUrl ?? ""}
@@ -855,12 +855,12 @@ export function Island() {
                     placeholder="http://localhost:11434/v1"
                     spellCheck={false}
                     autoComplete="off"
-                    disabled={envLocked("JARVIS_FALLBACK_BASE_URL")}
+                    disabled={envLocked("ALFRED_FALLBACK_BASE_URL")}
                   />
                 </Field>
                 <Field
                   label="Fallback model"
-                  locked={envLocked("JARVIS_FALLBACK_MODEL")}
+                  locked={envLocked("ALFRED_FALLBACK_MODEL")}
                 >
                   <input
                     value={form?.fallbackModel ?? ""}
@@ -868,7 +868,7 @@ export function Island() {
                     placeholder="minicpm5:latest"
                     spellCheck={false}
                     autoComplete="off"
-                    disabled={envLocked("JARVIS_FALLBACK_MODEL")}
+                    disabled={envLocked("ALFRED_FALLBACK_MODEL")}
                   />
                 </Field>
               </div>
@@ -878,7 +878,7 @@ export function Island() {
                 own; leave either field blank to turn the fallback off.
               </p>
 
-              <datalist id="jarvis-models">
+              <datalist id="alfred-models">
                 {models.map((model) => (
                   <option key={model} value={model} />
                 ))}
@@ -914,7 +914,7 @@ export function Island() {
 
               <p className="field-note">
                 The transcript, the facts you told it and the approvals you
-                gave live in plain text under ~/Jarvis.
+                gave live in plain text under ~/Alfred.
               </p>
 
               <div className="settings-foot">
@@ -1013,7 +1013,7 @@ export function Island() {
                   placeholder={
                     dictating
                       ? "Listening… click the mic to stop"
-                      : "Ask Jarvis anything…"
+                      : "Ask Alfred anything…"
                   }
                   spellCheck={false}
                   autoComplete="off"

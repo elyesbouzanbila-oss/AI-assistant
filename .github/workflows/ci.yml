@@ -26,13 +26,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Rust cargo check
-        run: cargo check -p jarvis-core
+        run: cargo check -p alfred-core
 
       - name: Rust cargo test
-        run: cargo test -p jarvis-core
+        run: cargo test -p alfred-core
 
       - name: Rust cargo clippy (warnings are errors)
-        run: cargo clippy -p jarvis-core --all-targets -- -D warnings
+        run: cargo clippy -p alfred-core --all-targets -- -D warnings
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

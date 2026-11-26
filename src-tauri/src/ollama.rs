@@ -84,7 +84,7 @@ fn wait_until(address: &str, timeout: Duration) -> bool {
 /// away when Windows tears the process down - which is the behaviour we want for
 /// a service the app itself started.
 fn start_server(address: &str) -> bool {
-    let log = std::env::temp_dir().join("jarvis-ollama.log");
+    let log = std::env::temp_dir().join("alfred-ollama.log");
     let file = match std::fs::File::create(&log) {
         Ok(file) => file,
         Err(error) => {

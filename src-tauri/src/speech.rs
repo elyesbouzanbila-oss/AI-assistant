@@ -4,7 +4,7 @@
 //! is killing that process: there is no in-band cancel. The text and the voice
 //! name travel in environment variables and the script arrives on stdin, so an
 //! answer written by a model can never become PowerShell source - the same rule
-//! as `JARVIS_ARG`.
+//! as `ALFRED_ARG`.
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
@@ -20,11 +20,11 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const SCRIPT: &str = r#"
 Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
-if ($env:JARVIS_SPEECH_VOICE) {
-  try { $synth.SelectVoice($env:JARVIS_SPEECH_VOICE) } catch { }
+if ($env:ALFRED_SPEECH_VOICE) {
+  try { $synth.SelectVoice($env:ALFRED_SPEECH_VOICE) } catch { }
 }
-$synth.Rate = [int]$env:JARVIS_SPEECH_RATE
-$synth.Speak([string]$env:JARVIS_SPEECH_TEXT)
+$synth.Rate = [int]$env:ALFRED_SPEECH_RATE
+$synth.Speak([string]$env:ALFRED_SPEECH_TEXT)
 "#;
 
 /// Start speaking. Returns once the process exists, not when it finishes.
@@ -43,9 +43,9 @@ pub fn speak(text: &str, voice: &str, rate: i32) -> Result<(), String> {
             "-Command",
             "-",
         ])
-        .env("JARVIS_SPEECH_TEXT", text)
-        .env("JARVIS_SPEECH_VOICE", voice)
-        .env("JARVIS_SPEECH_RATE", clamp_rate(rate).to_string())
+        .env("ALFRED_SPEECH_TEXT", text)
+        .env("ALFRED_SPEECH_VOICE", voice)
+        .env("ALFRED_SPEECH_RATE", clamp_rate(rate).to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

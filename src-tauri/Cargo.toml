@@ -1,18 +1,18 @@
 [package]
-name = "jarvis-app"
+name = "alfred-app"
 version.workspace = true
 edition.workspace = true
-description = "Jarvis desktop shell"
+description = "Alfred desktop shell"
 
 [lib]
-name = "jarvis_app"
+name = "alfred_app"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-jarvis-core = { path = "../crates/jarvis-core" }
+alfred-core = { path = "../crates/alfred-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }

@@ -1,9 +1,9 @@
-# Jarvis
+# Alfred
 
 A floating island AI assistant for Windows that actually operates your PC: it opens and closes
 apps, focuses windows, types, clicks, reads your screen and works with files.
 
-Rust (Tauri 2 + `jarvis-core`) behind a React island UI. ~15 MB installer, low idle memory,
+Rust (Tauri 2 + `alfred-core`) behind a React island UI. ~15 MB installer, low idle memory,
 no Node process at runtime.
 
 ## Requirements
@@ -28,7 +28,7 @@ the endpoint, model and API key. That is the whole setup — no file to edit.
 
 ## Settings
 
-Everything is in the island's gear menu and saved to `~/Jarvis/settings.json`: endpoint,
+Everything is in the island's gear menu and saved to `~/Alfred/settings.json`: endpoint,
 model, API key, max steps, and the optional voice model / endpoint / key. **Saving applies
 immediately** — no restart.
 
@@ -40,7 +40,11 @@ which an empty field cannot express; nothing shows the key itself, ever.
 
 `.env` still works and takes precedence, so an existing setup keeps running and the fields
 it controls show an `env` tag. `.env.example` documents every variable, including the few
-things the panel deliberately leaves out (OpenRouter's `JARVIS_SITE_URL`).
+things the panel deliberately leaves out (OpenRouter's `ALFRED_SITE_URL`).
+
+This project was formerly called Jarvis. The old `JARVIS_*` variables are still accepted
+(`ALFRED_*` wins when both are set), and an existing `~/Jarvis` folder keeps its settings and
+conversation instead of a new `~/Alfred` folder being created.
 
 ### Choosing a model
 
@@ -51,10 +55,10 @@ Any OpenAI-compatible endpoint works. The model must support **tool calling** an
 plainly OpenAI-compatible, so nothing in the client is OpenRouter-specific.
 
 ```
-JARVIS_BASE_URL=https://openrouter.ai/api/v1
-JARVIS_API_KEY=sk-or-v1-...
-JARVIS_MODEL=google/gemini-2.5-flash
-JARVIS_SITE_URL=https://example.com   # optional; only sent to openrouter.ai
+ALFRED_BASE_URL=https://openrouter.ai/api/v1
+ALFRED_API_KEY=sk-or-v1-...
+ALFRED_MODEL=google/gemini-2.5-flash
+ALFRED_SITE_URL=https://example.com   # optional; only sent to openrouter.ai
 ```
 
 Filter for models that support both requirements:
@@ -72,15 +76,15 @@ ollama pull qwen2.5vl          # the model must do tool calling AND image input
 ```
 
 ```
-JARVIS_BASE_URL=http://localhost:11434/v1
-JARVIS_MODEL=qwen2.5vl
+ALFRED_BASE_URL=http://localhost:11434/v1
+ALFRED_MODEL=qwen2.5vl
 ```
 
-`JARVIS_API_KEY` can stay empty for a loopback endpoint (`localhost`, `127.0.0.1`, `::1`): the app
+`ALFRED_API_KEY` can stay empty for a loopback endpoint (`localhost`, `127.0.0.1`, `::1`): the app
 only requires a key for remote endpoints and sends no `Authorization` header when it has none.
 
-Dictation is the exception: Ollama's API takes no audio input. Point `JARVIS_STT_BASE_URL` and
-`JARVIS_STT_API_KEY` at a cloud audio model and voice keeps working while chat stays local — the
+Dictation is the exception: Ollama's API takes no audio input. Point `ALFRED_STT_BASE_URL` and
+`ALFRED_STT_API_KEY` at a cloud audio model and voice keeps working while chat stays local — the
 transcript is typed into the input box and then answered by the local model.
 
 ### Fallback to a local model
@@ -89,8 +93,8 @@ Point the primary endpoint at OpenRouter (or anything else) and set a fallback, 
 rate limit or an outage becomes a slower answer instead of a dead assistant:
 
 ```
-JARVIS_FALLBACK_BASE_URL=http://localhost:11434/v1
-JARVIS_FALLBACK_MODEL=minicpm5:latest
+ALFRED_FALLBACK_BASE_URL=http://localhost:11434/v1
+ALFRED_FALLBACK_MODEL=minicpm5:latest
 ```
 
 Both are in the settings panel too, under **Fallback**. On Windows the app starts WSL,
@@ -120,14 +124,14 @@ Recordings stop by themselves after 30 seconds.
 
 By default the endpoint that answers questions also transcribes the audio (the OpenAI `input_audio`
 content part), so your existing key covers it. Gemini 2.5 Flash and the GPT audio models accept
-audio; for a text-only main model, point `JARVIS_STT_MODEL` at an audio-capable model.
+audio; for a text-only main model, point `ALFRED_STT_MODEL` at an audio-capable model.
 
-Transcription can also live somewhere else entirely: set `JARVIS_STT_BASE_URL` and
-`JARVIS_STT_API_KEY` and the recording is sent there instead. That is what makes a fully local chat
-model usable with cloud dictation. A separate endpoint never inherits `JARVIS_API_KEY`, so the chat
+Transcription can also live somewhere else entirely: set `ALFRED_STT_BASE_URL` and
+`ALFRED_STT_API_KEY` and the recording is sent there instead. That is what makes a fully local chat
+model usable with cloud dictation. A separate endpoint never inherits `ALFRED_API_KEY`, so the chat
 key cannot leak to another provider.
 
-Set `JARVIS_STT_PROVIDER=windows` (or pick **Windows speech recognition** in the panel) to
+Set `ALFRED_STT_PROVIDER=windows` (or pick **Windows speech recognition** in the panel) to
 transcribe offline with the Windows speech engine instead. No voice model, endpoint or key is
 needed; the recording goes through `System.Speech` in a hidden PowerShell, and the transcript is
 handed to the text model as usual. Accuracy is below a good audio model and the matching speech
@@ -135,8 +139,8 @@ language pack must be installed, but nothing leaves the machine.
 
 For accurate local dictation, pick **Whisper in WSL**. This runs whisper.cpp inside WSL Debian —
 the agent model and the STT model can then live in the same Linux environment. Set
-`JARVIS_WHISPER_BIN` (a command on WSL's PATH, e.g. `whisper-cli`, or its full Linux path) and
-`JARVIS_WHISPER_MODEL` (a Linux path to a GGUF model such as `ggml-small.en.bin`). The Windows
+`ALFRED_WHISPER_BIN` (a command on WSL's PATH, e.g. `whisper-cli`, or its full Linux path) and
+`ALFRED_WHISPER_MODEL` (a Linux path to a GGUF model such as `ggml-small.en.bin`). The Windows
 WAV is mounted at `/mnt/c/...` for the run, and the transcript goes to the text model exactly as
 before. Both fields are in the panel too.
 
@@ -146,7 +150,7 @@ whether transcription succeeds or not.
 
 ### Hearing the answer
 
-Dictate a request and the answer is spoken back; type one and Jarvis stays silent. That is the
+Dictate a request and the answer is spoken back; type one and Alfred stays silent. That is the
 whole rule: a prompt that is still exactly the transcript counts as spoken, so fixing a
 misheard word before sending makes it a typed turn.
 
@@ -155,8 +159,8 @@ dependency. Under 200 characters are read verbatim; longer answers are trimmed t
 two sentences and end with "The rest is on screen." Code blocks, URLs and markdown are never
 read aloud.
 
-`JARVIS_VOICE` selects an installed voice (the app does not install one), `JARVIS_SPEECH_RATE`
-goes from -10 to 10, and `JARVIS_SPEAK=false` turns it off. Dictating stops a sentence in
+`ALFRED_VOICE` selects an installed voice (the app does not install one), `ALFRED_SPEECH_RATE`
+goes from -10 to 10, and `ALFRED_SPEAK=false` turns it off. Dictating stops a sentence in
 progress, because the microphone would otherwise hear the assistant. Both are in the settings
 panel under Voice.
 
@@ -172,12 +176,12 @@ panel under Voice.
 | `press_keys` | `ctrl+s`, `alt+f4`, `ctrl+shift+t`, … |
 | `click` | Absolute screen coordinates (physical pixels) |
 | `screenshot` | Whole virtual desktop, downscaled to 1400 px JPEG before it goes to the model |
-| `read_file` / `write_file` | Jailed to `~/Jarvis/workspace` |
+| `read_file` / `write_file` | Jailed to `~/Alfred/workspace` |
 | `wait` | Fixed delay, or waits until a window title appears |
 | `scroll` | Wheel notches at the pointer (or given coordinates) |
 | `list_files` | One level of the workspace, jailed like the file tools |
 | `clipboard_get` / `clipboard_set` | Clipboard text; reading needs an Allow chip |
-| `remember` | Saves one fact about you to `~/Jarvis/memory.md`, injected into the prompt |
+| `remember` | Saves one fact about you to `~/Alfred/memory.md`, injected into the prompt |
 | `system_info` | OS, backend, workspace |
 
 ## Safety model
@@ -191,14 +195,14 @@ panel under Voice.
   reads, so it never gets near credentials.
 - Model-supplied text is passed to PowerShell as an environment variable, never interpolated into
   the script, so a prompt injection cannot become a command injection.
-- Every action is appended to `~/Jarvis/audit.log` (JSONL) with a timestamp and outcome.
-- The API key lives in `~/Jarvis/settings.json` or `.env`, read only by the Rust process. The
+- Every action is appended to `~/Alfred/audit.log` (JSONL) with a timestamp and outcome.
+- The API key lives in `~/Alfred/settings.json` or `.env`, read only by the Rust process. The
   webview learns only whether a key is stored, never its value, and the key is never written to
   the audit log.
 
 ## Memory
 
-Three plain text files in `~/Jarvis`. Nothing leaves the machine.
+Three plain text files in `~/Alfred`. Nothing leaves the machine.
 
 | File | What it holds | Limits |
 |---|---|---|
@@ -217,12 +221,12 @@ Three plain text files in `~/Jarvis`. Nothing leaves the machine.
 ## Layout
 
 ```
-crates/jarvis-core/     agent loop, LLM client, tools, policy, OS bridge (no UI dependency)
+crates/alfred-core/     agent loop, LLM client, tools, policy, OS bridge (no UI dependency)
 src-tauri/              Tauri shell: window, commands, events, global shortcut
 src/renderer/           island UI (React + CSS), with a scripted browser demo mode
 ```
 
-`jarvis-core` has no Tauri dependency, so `cargo test -p jarvis-core` runs on any platform.
+`alfred-core` has no Tauri dependency, so `cargo test -p alfred-core` runs on any platform.
 Open `npm run dev` in a browser to see the island UI in demo mode (no desktop control there).
 
 ## Not in this version

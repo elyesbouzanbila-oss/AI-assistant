@@ -1,6 +1,6 @@
-//! Tauri shell for Jarvis.
+//! Tauri shell for Alfred.
 //!
-//! All real work happens in `jarvis-core`; this file only wires that into a
+//! All real work happens in `alfred-core`; this file only wires that into a
 //! window: commands in, events out, plus the global shortcut.
 
 mod island;
@@ -10,18 +10,18 @@ mod speech;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
-use jarvis_core::agent::{Agent, AgentEvent, Emitter, Phase};
-use jarvis_core::audit::Audit;
-use jarvis_core::config::{self, Config, SttProvider};
-use jarvis_core::llm::LlmClient;
-use jarvis_core::memory::{Forget, Memory, Role};
-use jarvis_core::platform;
-use jarvis_core::platform::recorder::Recorder;
+use alfred_core::agent::{Agent, AgentEvent, Emitter, Phase};
+use alfred_core::audit::Audit;
+use alfred_core::config::{self, Config, SttProvider};
+use alfred_core::llm::LlmClient;
+use alfred_core::memory::{Forget, Memory, Role};
+use alfred_core::platform;
+use alfred_core::platform::recorder::Recorder;
 use tauri::{AppHandle, Emitter as _, Manager, State, WebviewWindow};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 const NOT_CONFIGURED: &str =
-    "Jarvis has no model yet. Open Settings (the gear icon) and add an endpoint, model and key.";
+    "Alfred has no model yet. Open Settings (the gear icon) and add an endpoint, model and key.";
 
 /// Speech settings plus the per-turn flag. Shared by the event forwarder, which
 /// speaks, and the commands, which know how the turn started; `save_settings`
@@ -50,7 +50,7 @@ impl VoiceState {
         if !by_voice || !self.enabled.load(Ordering::SeqCst) {
             return;
         }
-        let Some(spoken) = jarvis_core::speech::to_speech(text) else {
+        let Some(spoken) = alfred_core::speech::to_speech(text) else {
             return;
         };
         let name = self
@@ -321,7 +321,7 @@ fn forget_approvals(state: State<'_, AppState>) {
 
 #[tauri::command]
 async fn start_dictation(state: State<'_, AppState>) -> Result<(), String> {
-    // Half duplex: the microphone must not record Jarvis's own voice.
+    // Half duplex: the microphone must not record Alfred's own voice.
     speech::stop();
 
     let failure = state.runtime().startup_error.clone();
@@ -362,13 +362,13 @@ async fn stop_dictation(state: State<'_, AppState>) -> Result<String, String> {
     let provider = state.runtime().stt_provider;
     let transcript = match provider {
         SttProvider::Windows => {
-            jarvis_core::platform::transcribe::transcribe_wav(&wav).await
+            alfred_core::platform::transcribe::transcribe_wav(&wav).await
         }
         SttProvider::Whisper => {
             let Some((binary, model)) = state.runtime().whisper.clone() else {
                 return Err(NOT_CONFIGURED.to_string());
             };
-            jarvis_core::platform::transcribe::transcribe_with_whisper(
+            alfred_core::platform::transcribe::transcribe_with_whisper(
                 &wav, &binary, &model,
             )
             .await
@@ -534,7 +534,7 @@ async fn test_settings(draft: SettingsDraft) -> Result<ConnectionReport, String>
     let key = non_empty(&draft.api_key).unwrap_or(stored.api_key);
     let model = non_empty(&draft.model).unwrap_or(stored.model);
 
-    let workspace = config::jarvis_dir()
+    let workspace = config::alfred_dir()
         .map_err(|error| format!("{error:#}"))?
         .join("workspace");
     let llm = LlmClient::new(&Config::new(base_url, key, model, workspace));
@@ -675,7 +675,7 @@ pub fn run() {
                 })
             };
 
-            let memory = config::jarvis_dir()
+            let memory = config::alfred_dir()
                 .map(Memory::new)
                 .unwrap_or_else(|_| Memory::new(std::env::temp_dir()));
             let runtime = Runtime::build(&emit, &voice, &memory);
@@ -729,7 +729,7 @@ pub fn run() {
             test_settings
         ])
         .build(tauri::generate_context!())
-        .expect("Jarvis failed to start")
+        .expect("Alfred failed to start")
         .run(|_, event| {
             // A child process would otherwise finish the sentence after a quit.
             if let tauri::RunEvent::Exit = event {

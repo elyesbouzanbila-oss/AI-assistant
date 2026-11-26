@@ -1,9 +1,9 @@
 {
-  "name": "jarvis",
+  "name": "alfred",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Jarvis - a floating island AI assistant for your desktop",
+  "description": "Alfred - a floating island AI assistant for your desktop",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
