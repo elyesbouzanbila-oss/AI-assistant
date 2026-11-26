@@ -30,11 +30,21 @@ impl Decision {
     }
 }
 
-/// Tools with no side effects at all.
-const READ_ONLY: &[&str] = &["list_windows", "screenshot", "read_file", "system_info"];
+/// Tools that run without asking: nothing happens that the user did not
+/// ask for. `clipboard_set` belongs here because it only decides what will
+/// be pasted next; the copy itself is what the user requested.
+const SAFE: &[&str] = &[
+    "list_windows",
+    "screenshot",
+    "read_file",
+    "system_info",
+    "wait",
+    "list_files",
+    "clipboard_set",
+];
 
 /// Tools that change something on the machine.
-const MUTATING: &[&str] = &[
+const CONFIRM: &[&str] = &[
     "open_app",
     "close_app",
     "focus_window",
@@ -42,6 +52,7 @@ const MUTATING: &[&str] = &[
     "press_keys",
     "click",
     "write_file",
+    "scroll",
 ];
 
 /// Never touched, even with confirmation: an agent that can be steered by
@@ -63,11 +74,29 @@ const SENSITIVE: &[&str] = &[
 
 /// Decide what happens before a tool call reaches the OS.
 pub fn evaluate(tool: &str, args: &Value, workspace: &Path) -> Decision {
-    if READ_ONLY.contains(&tool) {
-        if tool == "read_file" && resolve_in_workspace(workspace, str_arg(args, "path")).is_none() {
+    // Reading the clipboard is the one read that needs a click: password
+    // managers put secrets there, and the text goes to the model.
+    if tool == "clipboard_get" {
+        return Decision::new(
+            Verdict::Confirm,
+            "the clipboard can hold a password; approve only if you meant to share it",
+        );
+    }
+
+    if SAFE.contains(&tool) {
+        // `list_files` may omit the path, which means the workspace root.
+        let path = str_arg(args, "path");
+        let target = if path.trim().is_empty() && tool == "list_files" {
+            "."
+        } else {
+            path
+        };
+        if matches!(tool, "read_file" | "list_files")
+            && resolve_in_workspace(workspace, target).is_none()
+        {
             return Decision::new(Verdict::Blocked, "path is outside the Jarvis workspace");
         }
-        return Decision::new(Verdict::Safe, "read-only");
+        return Decision::new(Verdict::Safe, "needs no approval");
     }
 
     if tool == "write_file" && resolve_in_workspace(workspace, str_arg(args, "path")).is_none() {
@@ -84,7 +113,7 @@ pub fn evaluate(tool: &str, args: &Value, workspace: &Path) -> Decision {
         }
     }
 
-    if MUTATING.contains(&tool) {
+    if CONFIRM.contains(&tool) {
         return Decision::new(Verdict::Confirm, "changes something on your machine");
     }
 
@@ -119,7 +148,7 @@ mod tests {
 
     #[test]
     fn read_only_tools_run_without_asking() {
-        for tool in ["list_windows", "screenshot", "system_info"] {
+        for tool in ["list_windows", "screenshot", "system_info", "wait"] {
             let decision = evaluate(tool, &json!({}), workspace());
             assert_eq!(decision.verdict, Verdict::Safe, "{tool}");
         }
@@ -133,11 +162,30 @@ mod tests {
             ("type_text", json!({ "text": "hi" })),
             ("press_keys", json!({ "combo": "ctrl+s" })),
             ("click", json!({ "x": 10, "y": 20 })),
+            ("scroll", json!({ "clicks": 3 })),
         ];
         for (tool, args) in cases {
             let decision = evaluate(tool, &args, workspace());
             assert_eq!(decision.verdict, Verdict::Confirm, "{tool}");
         }
+    }
+
+    #[test]
+    fn the_clipboard_is_read_only_with_permission() {
+        let read = evaluate("clipboard_get", &json!({}), workspace());
+        assert_eq!(read.verdict, Verdict::Confirm);
+
+        let write = evaluate("clipboard_set", &json!({ "text": "hi" }), workspace());
+        assert_eq!(write.verdict, Verdict::Safe);
+    }
+
+    #[test]
+    fn listing_files_cannot_escape_the_workspace() {
+        let root = evaluate("list_files", &json!({}), workspace());
+        assert_eq!(root.verdict, Verdict::Safe, "omitted path means the root");
+
+        let up = evaluate("list_files", &json!({ "path": "../" }), workspace());
+        assert_eq!(up.verdict, Verdict::Blocked);
     }
 
     #[test]

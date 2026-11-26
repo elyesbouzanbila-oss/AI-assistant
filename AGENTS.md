@@ -160,6 +160,12 @@ actual executable is the deliverable.
   outside `Config::workspace`, and do not bypass the jail "temporarily".
 - Policy (`policy.rs`): read-only tools run freely, changing tools need an
   explicit Allow, blocked app categories stay blocked, unknown tools are refused.
+  `clipboard_get` is the one safe-looking read that still needs an Allow: password
+  managers put secrets on the clipboard, and the text goes to the model.
+  `clipboard_set` needs none, and its text travels in `JARVIS_ARG` like everything else.
+- **Waiting beats guessing.** `wait` has a fixed-delay mode and a window-title mode
+  that polls `list_windows`; the prompt tells the model to prefer the latter after
+  opening an app. Do not fold the delay into `open_app` instead.
 - Do not add crates for audio, input injection or Win32 bindings. The Windows
   backend deliberately uses MCI and PowerShell so every action is reproducible by
   hand in a terminal.

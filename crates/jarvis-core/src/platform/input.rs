@@ -4,7 +4,7 @@
 //! type-checked during development even on a machine that is not Windows.
 
 use anyhow::{Context, Result};
-use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
+use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 
 use super::combo::{self, Modifier, Named};
 
@@ -65,6 +65,21 @@ pub fn click(x: i32, y: i32) -> Result<()> {
     enigo
         .button(Button::Left, Direction::Click)
         .context("could not click")?;
+    Ok(())
+}
+
+/// Scroll the wheel at the pointer, moving it first when a position is given.
+/// `clicks` is already in wheel notches; enigo converts them to WHEEL_DELTA.
+pub fn scroll(clicks: i32, position: Option<(i32, i32)>) -> Result<()> {
+    let mut enigo = enigo()?;
+    if let Some((x, y)) = position {
+        enigo
+            .move_mouse(x, y, Coordinate::Abs)
+            .context("could not move the mouse")?;
+    }
+    enigo
+        .scroll(clicks, Axis::Vertical)
+        .context("could not scroll")?;
     Ok(())
 }
 

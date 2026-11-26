@@ -97,6 +97,20 @@ $items = @(Get-Process | Where-Object { $_.MainWindowTitle -ne '' } | Select-Obj
 if ($items.Count -eq 0) { 'no visible windows' } else { $items -join "`n" }
 "#;
 
+/// Text currently on the clipboard, verbatim.
+const GET_CLIPBOARD: &str = r#"
+$ErrorActionPreference = 'Stop'
+Get-Clipboard -Raw
+"#;
+
+/// The text arrives in `JARVIS_ARG`, never in the script source: copying a
+/// pasted URL must not be able to become a command.
+const SET_CLIPBOARD: &str = r#"
+$ErrorActionPreference = 'Stop'
+Set-Clipboard -Value $env:JARVIS_ARG
+'ok'
+"#;
+
 /// Save the whole virtual desktop to the path in `JARVIS_ARG`.
 const SCREENSHOT: &str = r#"
 $ErrorActionPreference = 'Stop'
@@ -158,6 +172,21 @@ impl Platform for WindowsPlatform {
 
     fn click(&self, x: i32, y: i32) -> PlatformFuture<'_> {
         on_input_thread(move || input::click(x, y))
+    }
+
+    fn scroll(&self, clicks: i32, position: Option<(i32, i32)>) -> PlatformFuture<'_> {
+        on_input_thread(move || input::scroll(clicks, position))
+    }
+
+    fn get_clipboard(&self) -> PlatformFuture<'_> {
+        Box::pin(async move { powershell(GET_CLIPBOARD, None).await })
+    }
+
+    fn set_clipboard<'a>(&'a self, text: &'a str) -> PlatformFuture<'a> {
+        Box::pin(async move {
+            powershell(SET_CLIPBOARD, Some(text)).await?;
+            Ok(String::new())
+        })
     }
 
     fn screenshot(&self) -> PlatformFuture<'_> {

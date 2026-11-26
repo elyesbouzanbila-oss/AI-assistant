@@ -382,12 +382,13 @@ fn trim(history: &mut Vec<ChatMessage>) {
 fn system_prompt(config: &Config, platform: &str) -> String {
     let capabilities = if config.vision {
         "You can see the screen (screenshot) and act: open and close applications, \
-         focus windows, type text, press key combinations, click, and read or write \
-         files in your workspace."
+         focus windows, type text, press key combinations, click, scroll, wait for a \
+         window, use the clipboard, list the workspace, and read or write files in \
+         it."
     } else {
         "You act on this machine: open and close applications, focus windows, type \
-         text, press key combinations, click, and read or write files in your \
-         workspace."
+         text, press key combinations, click, scroll, wait for a window, use the \
+         clipboard, list the workspace, and read or write files in it."
     };
     // A model without image input must not be told to look, or it calls the one
     // tool whose result its provider rejects.
@@ -396,6 +397,8 @@ fn system_prompt(config: &Config, platform: &str) -> String {
     } else {
         "- You cannot see the screen: the screenshot tool is disabled here. Never claim to have looked; ask the user when you need to know what is displayed.\n- Prefer a small, verifiable step, then check what the tool reported."
     };
+    let pacing =
+        "- After opening an app, wait for its window by title instead of guessing at a delay.";
 
     format!(
         r#"You are Jarvis, the user's desktop assistant: you run on this machine and operate it for them.
@@ -416,6 +419,7 @@ What you can do:
 
 How to work:
 {sight}
+{pacing}
 - To type into a specific app, focus it first, then type. Typing goes to whatever has focus.
 - Only use tools you need. If the question is conversational, just answer.
 - Some actions need the user's approval and will pause for it. If they deny one, do not retry it: ask what they would prefer instead.
@@ -495,6 +499,19 @@ mod tests {
                 self.calls.lock().unwrap().push("screenshot".to_string());
                 Ok("data:image/jpeg;base64,AAAA".to_string())
             })
+        }
+        fn scroll(&self, clicks: i32, position: Option<(i32, i32)>) -> PlatformFuture<'_> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("scroll:{clicks}:{position:?}"));
+            Box::pin(async { Ok(String::new()) })
+        }
+        fn get_clipboard(&self) -> PlatformFuture<'_> {
+            Box::pin(async { Ok(String::new()) })
+        }
+        fn set_clipboard<'a>(&'a self, _text: &'a str) -> PlatformFuture<'a> {
+            Box::pin(async { Ok(String::new()) })
         }
     }
 
