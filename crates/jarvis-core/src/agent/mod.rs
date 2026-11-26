@@ -169,10 +169,11 @@ impl Agent {
         self.push(ChatMessage::user(prompt.to_string()));
         self.phase(Phase::Working, Some("Thinking".to_string()));
 
-        let schemas = tools::schema_values();
+        let schemas = tools::schema_values(self.config.vision);
         let ctx = ToolContext {
             workspace: self.config.workspace.clone(),
             platform: self.platform.clone(),
+            vision: self.config.vision,
         };
 
         for _step in 0..self.config.max_steps {
@@ -379,6 +380,23 @@ fn trim(history: &mut Vec<ChatMessage>) {
 }
 
 fn system_prompt(config: &Config, platform: &str) -> String {
+    let capabilities = if config.vision {
+        "You can see the screen (screenshot) and act: open and close applications, \
+         focus windows, type text, press key combinations, click, and read or write \
+         files in your workspace."
+    } else {
+        "You act on this machine: open and close applications, focus windows, type \
+         text, press key combinations, click, and read or write files in your \
+         workspace."
+    };
+    // A model without image input must not be told to look, or it calls the one
+    // tool whose result its provider rejects.
+    let sight = if config.vision {
+        "- You are not guessing at a remote system: this is the user's live desktop. Take a screenshot whenever you are unsure what is on screen, before clicking, or when reading an error.\n- Prefer a small, verifiable step, then look again. Do not fire a long blind sequence of clicks.\n- Coordinates for click are physical screen pixels from the screenshot you took."
+    } else {
+        "- You cannot see the screen: the screenshot tool is disabled here. Never claim to have looked; ask the user when you need to know what is displayed.\n- Prefer a small, verifiable step, then check what the tool reported."
+    };
+
     format!(
         r#"You are Jarvis, the user's desktop assistant: you run on this machine and operate it for them.
 
@@ -394,12 +412,10 @@ How long your answers are:
 - When the user asks you to explain something, be as thorough as the question deserves.
 
 What you can do:
-You can see the screen (screenshot) and act: open and close applications, focus windows, type text, press key combinations, click, and read or write files in your workspace.
+{capabilities}
 
 How to work:
-- You are not guessing at a remote system: this is the user's live desktop. Take a screenshot whenever you are unsure what is on screen, before clicking, or when reading an error.
-- Prefer a small, verifiable step, then look again. Do not fire a long blind sequence of clicks.
-- Coordinates for click are physical screen pixels from the screenshot you took.
+{sight}
 - To type into a specific app, focus it first, then type. Typing goes to whatever has focus.
 - Only use tools you need. If the question is conversational, just answer.
 - Some actions need the user's approval and will pause for it. If they deny one, do not retry it: ask what they would prefer instead.
@@ -544,6 +560,19 @@ mod tests {
             "test-model",
             workspace,
         );
+        agent_with(config, replies, platform, confirm_timeout)
+    }
+
+    fn agent_with(
+        config: Config,
+        replies: Vec<Completion>,
+        platform: Arc<FakePlatform>,
+        confirm_timeout: Duration,
+    ) -> (
+        Arc<Agent>,
+        Arc<ScriptedCompleter>,
+        Arc<Mutex<Vec<AgentEvent>>>,
+    ) {
         let completer = ScriptedCompleter::new(replies);
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
@@ -819,5 +848,58 @@ mod tests {
         assert!(prompt.contains("screenshot"));
         assert!(prompt.contains("desktop assistant"));
         assert!(prompt.to_lowercase().contains("one short sentence"));
+    }
+
+    #[tokio::test]
+    async fn vision_disabled_never_takes_or_sends_a_screenshot() {
+        let platform = FakePlatform::new();
+        let replies = vec![
+            Completion {
+                content: String::new(),
+                tool_calls: vec![call("call_1", "screenshot", serde_json::json!({}))],
+            },
+            Completion {
+                content: "I cannot see the screen.".to_string(),
+                tool_calls: Vec::new(),
+            },
+        ];
+
+        let mut config = Config::new(
+            "https://example.test/v1",
+            "test-key",
+            "test-model",
+            std::env::temp_dir(),
+        );
+        config.vision = false;
+
+        let prompt = system_prompt(&config, "Windows");
+        assert!(prompt.contains("cannot see the screen"));
+        assert!(!prompt.contains("Take a screenshot"));
+
+        let (agent, completer, _events) =
+            agent_with(config, replies, platform.clone(), Duration::from_secs(1));
+        agent.ask("what is on my screen?").await.unwrap();
+
+        assert!(
+            platform.calls().is_empty(),
+            "a disabled screenshot tool still reached the OS"
+        );
+        let sent_an_image = completer.seen().iter().any(|messages| {
+            messages.iter().any(|message| {
+                message
+                    .content
+                    .as_array()
+                    .map(|parts| {
+                        parts.iter().any(|part| {
+                            part.get("type").and_then(Value::as_str) == Some("image_url")
+                        })
+                    })
+                    .unwrap_or(false)
+            })
+        });
+        assert!(
+            !sent_an_image,
+            "an image reached a model that cannot accept one"
+        );
     }
 }

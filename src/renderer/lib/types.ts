@@ -49,6 +49,8 @@ export interface SettingsView {
   fallbackModel: string;
   /** Read dictated answers aloud. */
   speak: boolean;
+  /** Offer the screenshot tool; off for a model that rejects images. */
+  vision: boolean;
   /** SAPI voice name; blank means the system default. */
   voice: string;
   speechRate: number;
@@ -80,6 +82,7 @@ export interface SettingsDraft {
   clearApiKey: boolean;
   clearSttApiKey: boolean;
   speak: boolean;
+  vision: boolean;
   voice: string;
   speechRate: number;
 }

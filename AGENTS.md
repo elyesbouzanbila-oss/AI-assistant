@@ -48,6 +48,7 @@ without mutating the real environment; keep that seam.
 | `JARVIS_BASE_URL` | `https://api.openai.com/v1` | any OpenAI-compatible endpoint |
 | `JARVIS_API_KEY` | — | required for remote endpoints, optional on loopback |
 | `JARVIS_MODEL` | `gpt-4o-mini` | must support tool calling **and** image input |
+| `JARVIS_VISION` | `true` | offers the `screenshot` tool; `false` for a model that rejects images |
 | `JARVIS_MAX_STEPS` | `8` | clamped to 1..=24 |
 | `JARVIS_SITE_URL` | unset | OpenRouter attribution only, never sent elsewhere |
 | `JARVIS_STT_PROVIDER` | `model` | `model`, `windows` (SAPI) or `whisper` (whisper.cpp in WSL) |

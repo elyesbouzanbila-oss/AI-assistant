@@ -156,6 +156,7 @@ export function Island() {
         fallbackBaseUrl: view.fallbackBaseUrl,
         fallbackModel: view.fallbackModel,
         speak: view.speak,
+        vision: view.vision,
         voice: view.voice,
         speechRate: view.speechRate,
         apiKey: "",
@@ -450,6 +451,7 @@ export function Island() {
       form.fallbackBaseUrl !== settings.fallbackBaseUrl ||
       form.fallbackModel !== settings.fallbackModel ||
       form.speak !== settings.speak ||
+      form.vision !== settings.vision ||
       form.voice !== settings.voice ||
       form.speechRate !== settings.speechRate);
 
@@ -781,6 +783,18 @@ export function Island() {
                 />
                 <span>
                   Speak the answer <em>only when you dictated the request</em>
+                </span>
+              </label>
+
+              <label className="field-check">
+                <input
+                  type="checkbox"
+                  checked={form?.vision ?? true}
+                  onChange={(event) => edit({ vision: event.target.checked })}
+                  disabled={envLocked("JARVIS_VISION")}
+                />
+                <span>
+                  See the screen <em>off for a model that rejects images</em>
                 </span>
               </label>
 

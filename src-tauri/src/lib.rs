@@ -351,6 +351,7 @@ struct SettingsView {
     fallback_base_url: String,
     fallback_model: String,
     speak: bool,
+    vision: bool,
     voice: String,
     speech_rate: i32,
     has_api_key: bool,
@@ -397,6 +398,8 @@ struct SettingsDraft {
     clear_stt_api_key: bool,
     #[serde(default = "default_speak")]
     speak: bool,
+    #[serde(default = "default_vision")]
+    vision: bool,
     #[serde(default)]
     voice: String,
     #[serde(default)]
@@ -404,6 +407,10 @@ struct SettingsDraft {
 }
 
 fn default_speak() -> bool {
+    true
+}
+
+fn default_vision() -> bool {
     true
 }
 
@@ -446,6 +453,7 @@ fn settings_view(error: Option<String>) -> Result<SettingsView, String> {
         fallback_base_url: resolved.fallback_base_url.unwrap_or_default(),
         fallback_model: resolved.fallback_model.unwrap_or_default(),
         speak: resolved.speak,
+        vision: resolved.vision,
         voice: resolved.voice,
         speech_rate: resolved.speech_rate,
         has_api_key: !resolved.api_key.trim().is_empty(),
@@ -506,6 +514,7 @@ fn save_settings(state: State<'_, AppState>, draft: SettingsDraft) -> Result<Set
     settings.fallback_base_url = non_empty(&draft.fallback_base_url);
     settings.fallback_model = non_empty(&draft.fallback_model);
     settings.speak = Some(draft.speak);
+    settings.vision = Some(draft.vision);
     settings.voice = non_empty(&draft.voice);
     settings.speech_rate = Some(draft.speech_rate.clamp(-10, 10));
     if let Some(key) = non_empty(&draft.api_key) {
